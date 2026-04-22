@@ -291,17 +291,40 @@ export default function ChatInterface() {
   };
 
   return (
-    <div className="flex h-screen bg-black text-white font-sans overflow-hidden">
+    <div className="flex h-dvh bg-black text-white font-sans overflow-hidden">
       <audio ref={audioRef} hidden />
       
-      <Sidebar 
-        isOpen={isSidebarOpen}
-        onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
-        onNewChat={() => setMessages([INITIAL_MESSAGE])}
-        onOpenSettings={() => setShowSettings(true)}
-        customInstructions={customInstructions}
-        setCustomInstructions={setCustomInstructions}
-      />
+      <div className={cn(
+        "fixed inset-0 z-40 md:hidden",
+        isSidebarOpen ? "block" : "hidden"
+      )}>
+        <div 
+          className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+        <div className="absolute left-0 top-0 h-full w-[280px]">
+          <Sidebar 
+            isOpen={true}
+            onToggle={() => setIsSidebarOpen(false)}
+            onNewChat={() => {setMessages([INITIAL_MESSAGE]); setIsSidebarOpen(false)}}
+            onOpenSettings={() => {setShowSettings(true); setIsSidebarOpen(false)}}
+            customInstructions={customInstructions}
+            setCustomInstructions={setCustomInstructions}
+          />
+        </div>
+      </div>
+      
+      {/* Desktop Sidebar */}
+      <div className="hidden md:block h-full shrink-0">
+        <Sidebar 
+          isOpen={isSidebarOpen}
+          onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
+          onNewChat={() => setMessages([INITIAL_MESSAGE])}
+          onOpenSettings={() => setShowSettings(true)}
+          customInstructions={customInstructions}
+          setCustomInstructions={setCustomInstructions}
+        />
+      </div>
 
       <div className="flex-1 flex flex-col relative overflow-hidden">
         {/* High-Contrast Multi-Layer Mesh Background */}
