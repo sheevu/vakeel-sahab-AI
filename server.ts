@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
@@ -14,6 +15,47 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  // API Route for Gemini (Server-side to protect key)
+  app.post("/api/chat", async (req, res) => {
+    const { messages, systemInstruction, tools, customModelId } = req.body;
+    
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const history = messages.slice(0, -1).map((m: any) => ({
+        role: m.role === "user" ? "user" : "model",
+        parts: [{ text: m.content }]
+      }));
+      const lastMessage = messages[messages.length - 1].content;
+
+      const response = await ai.models.generateContent({
+        model: customModelId || "gemini-3-flash-preview",
+        contents: [...history, { role: "user", parts: [{ text: lastMessage }] }],
+        config: {
+          systemInstruction: systemInstruction,
+          temperature: 0.5,
+          topP: 0.65,
+          tools: [
+            ...(tools ? [{ functionDeclarations: tools }] : []),
+            { googleSearch: {} } // Enable Search Grounding
+          ],
+          toolConfig: tools ? { includeServerSideToolInvocations: true } : undefined,
+        }
+      });
+
+      res.json({
+        text: response.text || "",
+        toolCalls: response.functionCalls || undefined
+      });
+    } catch (error) {
+      console.error("Gemini Proxy Error:", error);
+      res.status(500).json({ error: "Failed to fetch from Gemini." });
+    }
+  });
 
   // API Route for OpenAI (Server-side to protect key)
   app.post("/api/openai", async (req, res) => {
@@ -42,6 +84,71 @@ async function startServer() {
     } catch (error) {
       console.error("OpenAI Proxy Error:", error);
       res.status(500).json({ error: "Failed to fetch from OpenAI." });
+    }
+  });
+
+  // API Route for TTS
+  app.post("/api/speech", async (req, res) => {
+    const { text } = req.body;
+    
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-flash-tts-preview",
+        contents: [{ parts: [{ text: `Say with a professional senior advocate authority: ${text}` }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Puck' }, // Professional authoritative voice
+            },
+          },
+        },
+      });
+
+      const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      res.json({ audioData });
+    } catch (error) {
+      console.error("TTS Error:", error);
+      res.status(500).json({ error: "Failed to generate speech." });
+    }
+  });
+
+  // API Route for STT
+  app.post("/api/stt", async (req, res) => {
+    const { audioData, mimeType } = req.body;
+    
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{
+          parts: [
+            {
+              inlineData: {
+                data: audioData,
+                mimeType: mimeType || "audio/webm"
+              }
+            },
+            { text: "Transcribe this audio accurately. Only return the transcription text." }
+          ]
+        }]
+      });
+
+      res.json({ text: response.text || "" });
+    } catch (error) {
+      console.error("STT Error:", error);
+      res.status(500).json({ error: "Failed to transcribe audio." });
     }
   });
 

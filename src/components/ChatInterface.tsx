@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Send, 
@@ -23,12 +23,19 @@ import {
   Cpu,
   RefreshCw,
   Download,
-  X
+  X,
+  MicOff,
+  ChevronLeft,
+  ChevronRight
 } from "lucide-react";
 import Orb from "./Orb";
 import Sidebar from "./Sidebar";
-import { getAICompletion, Message, Provider, getSpeech } from "../services/aiProvider";
+import { getAICompletion, Message, Provider, getSpeech, transcribeAudio } from "../services/aiProvider";
 import { cn } from "../lib/utils";
+import { useAudioRecorder } from "../lib/useAudioRecorder";
+import { useIsMobile } from "../lib/useIsMobile";
+
+const SettingsOverlay = lazy(() => import("./SettingsOverlay"));
 
 const SYSTEM_PROMPT = `Purpose and Goals:
 Act as a legendary Senior Advocate of the Supreme Court of India, providing high-level legal strategy and documentation support.
@@ -92,27 +99,184 @@ const INITIAL_MESSAGE: Message = {
   content: "Namastey, I am Vakeel Sahab GPT. How can I help you Today?"
 };
 
+interface Chat {
+  id: string;
+  title: string;
+  messages: Message[];
+  updatedAt: string;
+  isPinned?: boolean;
+  tag?: { label: string, color: string };
+}
+
 export default function ChatInterface() {
-  const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
+  const isMobile = useIsMobile();
+  const userEmail = "sheevum.goel@gmail.com"; // From metadata, for scoping
+  
+  const [chats, setChats] = useState<Chat[]>(() => {
+    const saved = localStorage.getItem(`vakeel_chats_${userEmail}`);
+    if (saved) return JSON.parse(saved);
+    
+    // Initial mock data as requested: "BNS Section 420 Query", "Drafting Notice for Rent"
+    return [
+      {
+        id: "1",
+        title: "BNS Section 420 Query",
+        messages: [{ role: "assistant", content: "Namastey, I am Vakeel Sahab GPT. How can I help you Today?" }],
+        updatedAt: "Today",
+        isPinned: false,
+        tag: { label: "Criminal", color: "bg-red-500/10 text-red-500" }
+      },
+      {
+        id: "2",
+        title: "Drafting Notice for Rent",
+        messages: [{ role: "assistant", content: "Namastey, I am Vakeel Sahab GPT. How can I help you Today?" }],
+        updatedAt: "Yesterday",
+        isPinned: true,
+        tag: { label: "Civil", color: "bg-blue-500/10 text-blue-500" }
+      }
+    ];
+  });
+
+  const [currentChatId, setCurrentChatId] = useState<string>(chats[0]?.id || "new");
+  
+  const currentChat = useMemo(() => {
+    return chats.find(c => c.id === currentChatId) || {
+      id: "new",
+      title: "New Consultation",
+      messages: [INITIAL_MESSAGE],
+      updatedAt: "Just now"
+    } as Chat;
+  }, [chats, currentChatId]);
+
+  const messages = currentChat.messages;
+
+  const setMessages = (newMessages: Message[] | ((prev: Message[]) => Message[])) => {
+    setChats(prev => {
+      const updated = prev.map(chat => {
+        if (chat.id === currentChatId) {
+          const nextMessages = typeof newMessages === 'function' ? newMessages(chat.messages) : newMessages;
+          return { ...chat, messages: nextMessages, updatedAt: "Just now" };
+        }
+        return chat;
+      });
+      
+      // If currently in a "new" chat that isn't in the list yet
+      if (currentChatId === "new" || !prev.find(c => c.id === currentChatId)) {
+        const nextMessages = typeof newMessages === 'function' ? newMessages([INITIAL_MESSAGE]) : newMessages;
+        const newChat: Chat = {
+          id: Date.now().toString(),
+          title: "New Consultation",
+          messages: nextMessages,
+          updatedAt: "Just now"
+        };
+        setCurrentChatId(newChat.id);
+        return [newChat, ...prev];
+      }
+      
+      return updated;
+    });
+  };
+
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [orbStatus, setOrbStatus] = useState<"idle" | "speaking" | "thinking">("idle");
   const [provider, setProvider] = useState<Provider>("gemini");
   const [customModelId, setCustomModelId] = useState("");
-  const [clientProfile, setClientProfile] = useState<any>(null);
+  const [clientProfile, setClientProfile] = useState<any>(() => {
+    const saved = localStorage.getItem(`vakeel_profile_${userEmail}`);
+    return saved ? JSON.parse(saved) : null;
+  });
   const [showSettings, setShowSettings] = useState(false);
   const [isPlayingId, setIsPlayingId] = useState<number | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(!isMobile);
   const [customInstructions, setCustomInstructions] = useState<string[]>([
-    "Follow Supreme Court procedures strictly.",
-    "BNS 2023 language consistency.",
-    "Prioritize offensive defense strategy."
+    "Strictly adhere to BNS/BNSS 2023 procedural frameworks.",
+    "Focus on anticipatory relief, FIR quashing, and cross-litigation.",
+    "Maintain courtroom authority; prioritize evidence mastery and strategy.",
   ]);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const { isRecording, audioBlob, startRecording, stopRecording, clearAudio } = useAudioRecorder();
+
+  // Cache profile and chats
+  useEffect(() => {
+    localStorage.setItem(`vakeel_profile_${userEmail}`, JSON.stringify(clientProfile));
+  }, [clientProfile, userEmail]);
+
+  useEffect(() => {
+    localStorage.setItem(`vakeel_chats_${userEmail}`, JSON.stringify(chats));
+  }, [chats, userEmail]);
+
+  useEffect(() => {
+    const handleToggleSidebar = () => setIsSidebarOpen(prev => !prev);
+    const handleCloseSidebar = () => setIsSidebarOpen(false);
+    window.addEventListener('toggle-sidebar', handleToggleSidebar);
+    window.addEventListener('close-sidebar', handleCloseSidebar);
+    return () => {
+      window.removeEventListener('toggle-sidebar', handleToggleSidebar);
+      window.removeEventListener('close-sidebar', handleCloseSidebar);
+    };
+  }, []);
+
+  const handleNewChat = () => {
+    const newChatId = "new_" + Date.now();
+    setCurrentChatId(newChatId);
+    if (isMobile) setIsSidebarOpen(false);
+  };
+
+  const handleSelectChat = (id: string) => {
+    setCurrentChatId(id);
+    if (isMobile) setIsSidebarOpen(false);
+  };
+
+  const handlePinChat = (id: string) => {
+    setChats(prev => prev.map(c => c.id === id ? { ...c, isPinned: !c.isPinned } : c));
+  };
+
+  const handleDeleteChat = (id: string) => {
+    setChats(prev => prev.filter(c => c.id !== id));
+    if (currentChatId === id) setCurrentChatId("new");
+  };
+
+  // Prevent scroll when mobile sidebar is open
+  useEffect(() => {
+    if (isMobile && isSidebarOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "unset";
+    }
+  }, [isMobile, isSidebarOpen]);
+
+  // Handle transcribed audio
+  useEffect(() => {
+    if (audioBlob) {
+      handleTranscription(audioBlob);
+    }
+  }, [audioBlob]);
+
+  const handleTranscription = async (blob: Blob) => {
+    setIsTranscribing(true);
+    setOrbStatus("thinking");
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = async () => {
+        const base64data = (reader.result as string).split(",")[1];
+        const text = await transcribeAudio(base64data, blob.type);
+        setInput(prev => (prev ? `${prev} ${text}` : text));
+        clearAudio();
+      };
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsTranscribing(false);
+      setOrbStatus("idle");
+    }
+  };
 
   const handleSpeech = async (text: string, index: number) => {
     if (isPlayingId === index) {
@@ -183,13 +347,27 @@ export default function ChatInterface() {
     if (!input.trim() || isTyping) return;
 
     const userMessage: Message = { role: "user", content: input };
+    const isFirstUserMessage = messages.length === 1; // Initial message is from assistant
+
+    if (isFirstUserMessage && (currentChatId.startsWith("new_") || currentChat.title === "New Consultation")) {
+      setChats(prev => prev.map(c => {
+        if (c.id === currentChatId) {
+          // Truncate input for title
+          const title = input.length > 30 ? input.substring(0, 30) + "..." : input;
+          return { ...c, title };
+        }
+        return c;
+      }));
+    }
+
     setMessages(prev => [...prev, userMessage]);
     setInput("");
     setIsTyping(true);
     setOrbStatus("thinking");
 
     try {
-      const combinedPrompt = `${SYSTEM_PROMPT}\n\nCUSTOM USER DIRECTIVES:\n${customInstructions.join("\n")}`;
+      const profileString = clientProfile ? `\n\nADVOCATE PROFILE:\nName: ${clientProfile.name || 'N/A'}\nSpecialization: ${clientProfile.specialization || 'N/A'}` : '';
+      const combinedPrompt = `${SYSTEM_PROMPT}${profileString}\n\nCUSTOM USER DIRECTIVES:\n${customInstructions.join("\n")}`;
       
       const response = await getAICompletion([...messages, userMessage], {
         provider,
@@ -294,393 +472,325 @@ export default function ChatInterface() {
     <div className="flex h-dvh bg-black text-white font-sans overflow-hidden">
       <audio ref={audioRef} hidden />
       
-      <div className={cn(
-        "fixed inset-0 z-40 md:hidden",
-        isSidebarOpen ? "block" : "hidden"
-      )}>
-        <div 
-          className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-        <div className="absolute left-0 top-0 h-full w-[280px]">
-          <Sidebar 
-            isOpen={true}
-            onToggle={() => setIsSidebarOpen(false)}
-            onNewChat={() => {setMessages([INITIAL_MESSAGE]); setIsSidebarOpen(false)}}
-            onOpenSettings={() => {setShowSettings(true); setIsSidebarOpen(false)}}
-            customInstructions={customInstructions}
-            setCustomInstructions={setCustomInstructions}
-          />
-        </div>
-      </div>
-      
-      {/* Desktop Sidebar */}
-      <div className="hidden md:block h-full shrink-0">
-        <Sidebar 
-          isOpen={isSidebarOpen}
-          onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
-          onNewChat={() => setMessages([INITIAL_MESSAGE])}
-          onOpenSettings={() => setShowSettings(true)}
-          customInstructions={customInstructions}
-          setCustomInstructions={setCustomInstructions}
-        />
-      </div>
+      {/* Mobile Sidebar Overlay */}
+      <AnimatePresence>
+        {isMobile && isSidebarOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40"
+          >
+            <div 
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setIsSidebarOpen(false)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      <div className="flex-1 flex flex-col relative overflow-hidden">
+      <Sidebar 
+        isOpen={isSidebarOpen}
+        onNewChat={handleNewChat}
+        onOpenSettings={() => {setShowSettings(true); if (isMobile) setIsSidebarOpen(false)}}
+        customInstructions={customInstructions}
+        setCustomInstructions={setCustomInstructions}
+        isMobile={isMobile}
+        chats={chats}
+        currentChatId={currentChatId}
+        onSelectChat={handleSelectChat}
+        onPinChat={handlePinChat}
+        onDeleteChat={handleDeleteChat}
+      />
+      
+      <div className="flex-1 flex flex-col relative overflow-hidden w-full">
         {/* High-Contrast Multi-Layer Mesh Background */}
         <div className="fixed inset-0 overflow-hidden pointer-events-none bg-[#050505]">
-        {/* Evolutionary Mesh Blobs */}
-        <motion.div 
-          animate={{
-            scale: [1, 1.2, 1],
-            rotate: [0, 90, 0],
-            x: [-50, 50, -50],
-            y: [-20, 40, -20],
-          }}
-          transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute -top-[10%] -left-[10%] w-[80%] h-[80%] bg-[radial-gradient(circle_at_center,_rgba(249,115,22,0.3)_0%,_transparent_70%)] blur-[100px]" 
-        />
-        <motion.div 
-          animate={{
-            scale: [1.2, 1, 1.2],
-            rotate: [0, -45, 0],
-            x: [30, -60, 30],
-            y: [50, -20, 50],
-          }}
-          transition={{ duration: 30, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute -bottom-[20%] -right-[10%] w-[90%] h-[90%] bg-[radial-gradient(circle_at_center,_rgba(220,38,38,0.25)_0%,_transparent_70%)] blur-[120px]" 
-        />
-        <motion.div 
-          animate={{
-            scale: [1, 1.5, 1],
-            x: [-100, 100, -100],
-            y: [100, -100, 100],
-          }}
-          transition={{ duration: 35, repeat: Infinity, ease: "easeInOut" }}
-          className="absolute top-1/4 left-1/4 w-[60%] h-[60%] bg-[radial-gradient(circle_at_center,_rgba(244,63,94,0.2)_0%,_transparent_70%)] blur-[140px]" 
-        />
-
-        {/* Stylized State Emblem Watermark with Golden Tint */}
-        <div 
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] opacity-[0.03] grayscale brightness-125 pointer-events-none mix-blend-screen"
-          style={{ filter: "sepia(1) saturate(10) hue-rotate(-20deg) brightness(0.6)" }}
-        >
-           <img 
-            src="https://upload.wikimedia.org/wikipedia/commons/4/4f/Emblem_of_India.svg" 
-            alt="State Emblem of India" 
-            className="w-full h-full object-contain"
-            referrerPolicy="no-referrer"
-           />
-        </div>
-
-        {/* Subtle Tech Grid */}
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff05_1px,transparent_1px),linear-gradient(to_bottom,#ffffff05_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)]" />
-        
-        {/* Vignette */}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.8)_100%)]" />
-      </div>
-      
-      {/* Noise Texture refined */}
-      <div className="fixed inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.15] pointer-events-none mix-blend-soft-light" />
-
-      {/* Header */}
-      <header className="flex items-center justify-between p-4 bg-black/40 backdrop-blur-xl border-b border-white/5 z-20 shrink-0">
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 hover:bg-white/5 rounded-xl transition-colors text-gray-400 hover:text-white"
+          <motion.div 
+            animate={{
+              scale: [1, 1.2, 1],
+              rotate: [0, 90, 0],
+              x: [-50, 50, -50],
+              y: [-20, 40, -20],
+            }}
+            transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
+            className="absolute -top-[10%] -left-[10%] w-[80%] h-[80%] bg-[radial-gradient(circle_at_center,_rgba(249,115,22,0.3)_0%,_transparent_70%)] blur-[100px]" 
+          />
+          <motion.div 
+            animate={{
+              scale: [1.2, 1, 1.2],
+              rotate: [0, -45, 0],
+              x: [30, -60, 30],
+              y: [50, -20, 50],
+            }}
+            transition={{ duration: 30, repeat: Infinity, ease: "easeInOut" }}
+            className="absolute -bottom-[20%] -right-[10%] w-[90%] h-[90%] bg-[radial-gradient(circle_at_center,_rgba(220,38,38,0.25)_0%,_transparent_70%)] blur-[120px]" 
+          />
+          
+          <div 
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] opacity-[0.03] grayscale brightness-125 pointer-events-none mix-blend-screen"
+            style={{ filter: "sepia(1) saturate(10) hue-rotate(-20deg) brightness(0.6)" }}
           >
-            <Menu className="w-5 h-5" />
-          </button>
+             <img 
+              src="https://upload.wikimedia.org/wikipedia/commons/4/4f/Emblem_of_India.svg" 
+              alt="State Emblem of India" 
+              className="w-full h-full object-contain"
+              referrerPolicy="no-referrer"
+             />
+          </div>
+
+          <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff05_1px,transparent_1px),linear-gradient(to_bottom,#ffffff05_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.8)_100%)]" />
+        </div>
+        
+        <div className="fixed inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.1] pointer-events-none mix-blend-soft-light" />
+
+        {/* Header - Sticky */}
+        <header className="sticky top-0 w-full flex items-center justify-between py-3 px-4 bg-black/60 backdrop-blur-2xl border-b border-white/10 z-[45] shrink-0">
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="p-2.5 bg-white/5 hover:bg-white/10 rounded-2xl transition-all text-gray-300 hover:text-white border border-white/10 shadow-lg active:scale-90"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-orange-600 drop-shadow-[0_0_8px_rgba(234,88,12,0.5)]" />
+              <h1 className="text-lg md:text-xl font-black tracking-tighter uppercase italic flex items-center leading-none">
+                VAKEEL<span className="text-orange-600">GPT</span>
+              </h1>
+            </div>
+          </div>
+
           <div className="flex items-center gap-2">
-            <Scale className="w-5 h-5 text-orange-600" />
-            <h1 className="text-xl font-black tracking-tighter uppercase italic flex items-center">
-              VAKEEL<span className="text-orange-600">GPT</span>
-            </h1>
+            <div className="hidden sm:flex px-3 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/20 text-[10px] uppercase tracking-widest text-orange-400 font-black shadow-inner">
+              Supreme Court Edition
+            </div>
+            <button 
+              onClick={() => setShowSettings(true)}
+              className="p-2.5 hover:bg-white/5 rounded-2xl transition-colors text-gray-500 hover:text-white border border-transparent hover:border-white/10"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
           </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="px-3 py-1 rounded-full bg-orange-500/10 border border-orange-500/20 text-[10px] uppercase tracking-widest text-orange-400 font-black md:flex hidden">
-            Consolidated Counsel
+        </header>
+
+        {/* Main Content Area */}
+        <main className="flex-1 overflow-hidden relative flex flex-col items-center">
+          
+          {/* Floating AI Hub */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+            <AnimatePresence>
+              {messages.length < 3 && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0, scale: 1.1, filter: "blur(20px)" }}
+                  className="relative flex flex-col items-center justify-center w-full h-full"
+                >
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 opacity-40 scale-[1.2] md:scale-[1.5] blur-xl pointer-events-none">
+                    <Orb status={orbStatus} />
+                  </div>
+                  
+                  <div className="relative z-10 flex flex-col items-center justify-center text-center px-4 mix-blend-screen">
+                    <motion.h2 
+                      initial={{ y: 20, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      className="text-5xl md:text-8xl font-black tracking-tighter leading-[0.8] uppercase flex flex-col items-center drop-shadow-[0_0_30px_rgba(255,255,255,0.2)]"
+                    >
+                      <span className="text-white selection:bg-orange-600">LEGAL DEFENSE</span>
+                      <div className="flex items-center">
+                        <span className="text-white/90">WITH</span>
+                        <span className="text-orange-600 block ml-4 drop-shadow-[0_0_20px_rgba(234,88,12,0.5)]">CONFIDENCE</span>
+                      </div>
+                    </motion.h2>
+                    <p className="text-gray-400 text-xs md:text-sm mt-8 max-w-sm font-bold tracking-tight opacity-70 drop-shadow-lg">
+                      Modelled as Senior Advocate of Supreme Court.<br />
+                      Court-ready advice in Hinglish.
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-          <button 
-            onClick={() => setShowSettings(!showSettings)}
-            className="p-2 hover:bg-white/5 rounded-full transition-colors"
+
+          {/* Chat Messages */}
+          <div 
+            ref={scrollRef}
+            className={cn(
+              "flex-1 w-full max-w-3xl overflow-y-auto px-4 py-8 space-y-6 scroll-smooth z-0 transition-all duration-500",
+              messages.length < 3 ? "opacity-0 invisible" : "opacity-100 visible"
+            )}
           >
-            <Settings className="w-5 h-5 text-gray-500" />
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="flex-1 overflow-hidden relative flex flex-col items-center justify-between">
-        
-        {/* Floating AI Hub (Center focus like the image) */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <AnimatePresence>
-            {messages.length < 3 && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0, scale: 1.1, filter: "blur(20px)" }}
-                className="relative flex flex-col items-center justify-center w-full h-full"
+            {messages.map((msg, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={cn(
+                  "flex gap-4 w-full",
+                  msg.role === "user" ? "flex-row-reverse" : "flex-row",
+                  (msg as any).isTool && "justify-center"
+                )}
               >
-                {/* Background Quick Action placeholders */}
-                <div className="grid grid-cols-2 gap-8 opacity-[0.03] scale-[1.5] absolute pointer-events-none">
-                  <div className="w-48 h-48 bg-white/20 rounded-[3rem]" />
-                  <div className="w-48 h-48 bg-white/20 rounded-[3rem]" />
-                  <div className="w-48 h-48 bg-white/20 rounded-[3rem]" />
-                  <div className="w-48 h-48 bg-white/20 rounded-[3rem]" />
-                </div>
-
-                {/* Orb behind text - Improved Layering */}
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 opacity-40 scale-[1.5] blur-xl pointer-events-none">
-                  <Orb status={orbStatus} />
-                </div>
-                
-                {/* Text Overlaying Orb area - Improved Contrast */}
-                <div className="relative z-10 flex flex-col items-center justify-center text-center px-4 mix-blend-screen">
-                  <motion.h2 
-                    initial={{ y: 20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    className="text-7xl md:text-8xl font-black tracking-tighter leading-[0.8] uppercase flex flex-col items-center drop-shadow-[0_0_30px_rgba(255,255,255,0.2)]"
-                  >
-                    <span className="text-white selection:bg-orange-600">LEGAL DEFENSE</span>
-                    <div className="flex items-center">
-                      <span className="text-white/90">WITH</span>
-                      <span className="text-orange-600 block ml-4 drop-shadow-[0_0_20px_rgba(234,88,12,0.5)]">CONFIDENCE</span>
+                {(msg as any).isTool ? (
+                  <div className="flex flex-col items-center gap-2 py-4 px-10 bg-orange-600/5 border border-orange-500/20 rounded-[2rem] backdrop-blur-3xl shadow-[0_0_50px_rgba(234,88,12,0.1)]">
+                    <div className="flex items-center gap-3">
+                      <RefreshCw className="w-4 h-4 text-orange-500 animate-spin" />
+                      <span className="text-[10px] uppercase font-black tracking-[0.2em] text-orange-500/80 italic">Legal Engine Processing...</span>
                     </div>
-                  </motion.h2>
-                  <p className="text-gray-400 text-sm mt-8 max-w-sm font-bold tracking-tight opacity-70 drop-shadow-lg">
-                    Modelled as Senior Advocate of Supreme Court.<br />
-                    Court-ready advice in Hinglish.
-                  </p>
+                    <div className="text-xs font-bold text-gray-400">{msg.content}</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className={cn(
+                      "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center",
+                      msg.role === "user" ? "bg-orange-600" : "bg-white/5 border border-white/5"
+                    )}>
+                      {msg.role === "user" ? <User className="w-5 h-5" /> : <Gavel className="w-4 h-4 text-orange-400" />}
+                    </div>
+                    <div className={cn(
+                      "max-w-[85%] rounded-3xl p-5 text-sm leading-relaxed whitespace-pre-wrap shadow-2xl relative group",
+                      msg.role === "user" 
+                        ? "bg-orange-600/90 text-white rounded-tr-none" 
+                        : "bg-black/60 backdrop-blur-3xl border border-white/10 rounded-tl-none text-gray-100"
+                    )}>
+                      {msg.content}
+                      {msg.role === "assistant" && (
+                        <div className="absolute -right-12 bottom-0 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                          <button 
+                            onClick={() => handleSpeech(msg.content, i)}
+                            className={cn(
+                              "p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all",
+                              isPlayingId === i && "text-orange-500 scale-110"
+                            )}
+                          >
+                            <Volume2 className={cn("w-4 h-4", isPlayingId === i && "animate-pulse")} />
+                          </button>
+                          <button 
+                            onClick={() => handleDownloadDoc(msg.content)}
+                            className="p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all text-gray-400 hover:text-orange-500"
+                            title="Download as .doc"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </motion.div>
+            ))}
+            {isTyping && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex gap-4"
+              >
+                <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center shadow-[0_0_15px_rgba(234,88,12,0.1)]">
+                  <Gavel className="w-4 h-4 text-orange-400 animate-pulse" />
+                </div>
+                <div className="bg-white/[0.03] backdrop-blur-3xl border border-white/5 rounded-2xl rounded-tl-none px-5 py-4 flex items-center gap-1.5 shadow-xl">
+                  <motion.span 
+                    animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
+                    transition={{ repeat: Infinity, duration: 1.2 }}
+                    className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
+                  />
+                  <motion.span 
+                    animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
+                    transition={{ repeat: Infinity, duration: 1.2, delay: 0.2 }}
+                    className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
+                  />
+                  <motion.span 
+                    animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
+                    transition={{ repeat: Infinity, duration: 1.2, delay: 0.4 }}
+                    className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
+                  />
+                  <span className="ml-2 text-[10px] uppercase tracking-widest font-black text-orange-500/60 italic">Vakeel thinking...</span>
                 </div>
               </motion.div>
             )}
-          </AnimatePresence>
-        </div>
-
-        {/* Chat Messages */}
-        <div 
-          ref={scrollRef}
-          className={cn(
-            "flex-1 w-full max-w-3xl overflow-y-auto px-4 py-8 space-y-6 scroll-smooth z-0 transition-all duration-500",
-            messages.length < 3 ? "opacity-0 invisible" : "opacity-100 visible"
-          )}
-        >
-          {messages.map((msg, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: msg.role === "user" ? 20 : -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className={cn(
-                "flex gap-4 w-full",
-                msg.role === "user" ? "flex-row-reverse" : "flex-row",
-                (msg as any).isTool && "justify-center"
-              )}
-            >
-              {(msg as any).isTool ? (
-                <div className="flex flex-col items-center gap-2 py-4 px-10 bg-orange-600/5 border border-orange-500/20 rounded-[2rem] backdrop-blur-3xl shadow-[0_0_50px_rgba(234,88,12,0.1)]">
-                  <div className="flex items-center gap-3">
-                    <RefreshCw className="w-4 h-4 text-orange-500 animate-spin" />
-                    <span className="text-[10px] uppercase font-black tracking-[0.2em] text-orange-500/80 italic">Legal Engine Processing...</span>
-                  </div>
-                  <div className="text-xs font-bold text-gray-400">{msg.content}</div>
-                </div>
-              ) : (
-                <>
-                  <div className={cn(
-                    "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center",
-                    msg.role === "user" ? "bg-orange-600" : "bg-white/5 border border-white/5"
-                  )}>
-                    {msg.role === "user" ? <User className="w-5 h-5" /> : <Gavel className="w-4 h-4 text-orange-400" />}
-                  </div>
-                  <div className={cn(
-                    "max-w-[85%] rounded-3xl p-5 text-sm leading-relaxed whitespace-pre-wrap shadow-2xl relative group",
-                    msg.role === "user" 
-                      ? "bg-orange-600/90 text-white rounded-tr-none" 
-                      : "bg-black/60 backdrop-blur-3xl border border-white/10 rounded-tl-none text-gray-100"
-                  )}>
-                    {msg.content}
-                    {msg.role === "assistant" && (
-                      <div className="absolute -right-12 bottom-0 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                        <button 
-                          onClick={() => handleSpeech(msg.content, i)}
-                          className={cn(
-                            "p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all",
-                            isPlayingId === i && "text-orange-500 scale-110"
-                          )}
-                        >
-                          <Volume2 className={cn("w-4 h-4", isPlayingId === i && "animate-pulse")} />
-                        </button>
-                        <button 
-                          onClick={() => handleDownloadDoc(msg.content)}
-                          className="p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all text-gray-400 hover:text-orange-500"
-                          title="Download as .doc"
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </motion.div>
-          ))}
-          {isTyping && (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex gap-4"
-            >
-              <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center shadow-[0_0_15px_rgba(234,88,12,0.1)]">
-                <Gavel className="w-4 h-4 text-orange-400 animate-pulse" />
-              </div>
-              <div className="bg-white/[0.03] backdrop-blur-3xl border border-white/5 rounded-2xl rounded-tl-none px-5 py-4 flex items-center gap-1.5 shadow-xl">
-                <motion.span 
-                  animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
-                  transition={{ repeat: Infinity, duration: 1.2 }}
-                  className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
-                />
-                <motion.span 
-                  animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
-                  transition={{ repeat: Infinity, duration: 1.2, delay: 0.2 }}
-                  className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
-                />
-                <motion.span 
-                  animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
-                  transition={{ repeat: Infinity, duration: 1.2, delay: 0.4 }}
-                  className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
-                />
-                <span className="ml-2 text-[10px] uppercase tracking-widest font-black text-orange-500/60 italic">Vakeel thinking...</span>
-              </div>
-            </motion.div>
-          )}
-        </div>
-
-        {/* Action Suggestion Grid (Only show if chat has started) */}
-        <AnimatePresence>
-          {messages.length >= 3 && messages.length < 6 && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0 }}
-              className="grid grid-cols-2 gap-3 px-4 mb-4 z-10"
-            >
-              <QuickAction icon={ShieldCheck} label="Case Strategy" sub="Offensive/Defensive" onClick={() => setInput("Mujhe ek case strategy chahiye.")} />
-              <QuickAction icon={Search} label="Search Act" sub="Sections & Provisions" onClick={() => setInput("Muje Section 420 ke baare mein bataiye.")} />
-              <QuickAction icon={FileText} label="Draft Doc" sub="Notices & Summons" onClick={() => setInput("Muje ek Legal Notice draft karni hai.")} />
-              <QuickAction icon={Info} label="BNS Rules" sub="Criminal Law 2023" onClick={() => setInput("Bharatiya Nyaya Sanhita ke naye rules kya hain?")} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Input Bar Section */}
-        <div className="w-full max-w-3xl p-4 pb-8 z-10">
-          <div className="relative flex items-center gap-2">
-             {/* Left Plus/Attach */}
-             <button className="p-4 bg-white/5 hover:bg-white/10 rounded-full transition-all text-gray-500 hover:text-white border border-white/5 shadow-xl">
-               <Plus className="w-5 h-5" />
-             </button>
-
-             {/* Input Area */}
-             <div className="flex-1 relative group">
-                <input 
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder="Draft your legal strategy..."
-                  className="w-full bg-white/5 border border-white/5 backdrop-blur-3xl rounded-[2rem] px-8 py-5 pr-16 text-sm focus:outline-none focus:bg-white/10 focus:border-white/10 transition-all font-medium text-gray-200 placeholder:text-gray-600 shadow-2xl"
-                />
-                <button 
-                  onClick={handleSend}
-                  disabled={!input.trim() || isTyping}
-                  className="absolute right-3 top-2.5 p-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:hover:bg-orange-600 rounded-2xl transition-all shadow-xl group-focus-within:scale-105"
-                >
-                  <Send className="w-4 h-4 text-white" />
-                </button>
-             </div>
-
-             {/* Mic Button (Inspired by image) */}
-             <button className="p-5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-full text-gray-500 hover:text-orange-500 transition-all active:scale-95 shadow-2xl">
-                <Mic className="w-5 h-5" />
-             </button>
           </div>
-        </div>
-      </main>
 
-      {/* Settings Overlay */}
-      {showSettings && (
-        <motion.div 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex items-center justify-center p-4"
-          onClick={() => setShowSettings(false)}
-        >
-          <motion.div 
-            initial={{ scale: 0.9, y: 20 }}
-            animate={{ scale: 1, y: 0 }}
-            className="bg-[#0A0A0A] border border-white/10 rounded-[2.5rem] p-8 w-full max-w-sm shadow-[0_0_100px_rgba(249,115,22,0.1)]"
-            onClick={e => e.stopPropagation()}
-          >
-            <h3 className="text-xl font-black mb-6 uppercase tracking-widest italic">
-              Config<span className="text-orange-600">uration</span>
-            </h3>
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] text-gray-500 uppercase tracking-widest font-black">AI Orchestrator</label>
-                <div className="flex bg-white/5 rounded-2xl p-1.5 border border-white/5">
+          {/* Action Suggestion Grid */}
+          <AnimatePresence>
+            {messages.length >= 3 && messages.length < 8 && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                className="grid grid-cols-2 gap-3 w-full max-w-3xl px-4 mb-4 z-10"
+              >
+                <QuickAction icon={ShieldCheck} label="Case Strategy" sub="Tactical Plan" onClick={() => setInput("Mujhe ek case strategy chahiye.")} />
+                <QuickAction icon={Search} label="Search Act" sub="BNS Sections" onClick={() => setInput("Muje Section 420 ke baare mein bataiye.")} />
+                <QuickAction icon={FileText} label="Draft Doc" sub="Notices" onClick={() => setInput("Muje ek Legal Notice draft karni hai.")} />
+                <QuickAction icon={Info} label="BNS Rules" sub="Laws 2023" onClick={() => setInput("Bharatiya Nyaya Sanhita ke naye rules kya hain?")} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Input Bar Section */}
+          <div className="w-full max-w-3xl p-4 md:pb-8 z-10">
+            <div className="relative flex items-center gap-2">
+               <button className="p-4 bg-white/5 hover:bg-white/10 rounded-full transition-all text-gray-500 hover:text-white border border-white/5 shadow-xl sm:flex hidden">
+                 <Plus className="w-5 h-5" />
+               </button>
+
+               <div className="flex-1 relative group">
+                  <input 
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                    placeholder="Ask Vakeel Sahab..."
+                    className="w-full bg-white/5 border border-white/5 backdrop-blur-3xl rounded-[2rem] px-6 md:px-8 py-4 md:py-5 pr-14 md:pr-16 text-base md:text-sm focus:outline-none focus:bg-white/10 transition-all text-gray-200 placeholder:text-gray-600 shadow-2xl"
+                  />
                   <button 
-                    onClick={() => setProvider("gemini")}
-                    className={cn(
-                      "flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-tighter transition-all",
-                      provider === "gemini" ? "bg-white/10 text-white" : "text-gray-600 hover:text-gray-400"
-                    )}
+                    onClick={handleSend}
+                    disabled={!input.trim() || isTyping}
+                    className="absolute right-2 md:right-3 top-1.5 md:top-2.5 p-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 rounded-2xl transition-all shadow-xl"
                   >
-                    Gemini
+                    <Send className="w-4 h-4 text-white" />
                   </button>
-                  <button 
-                    onClick={() => setProvider("openai")}
-                    className={cn(
-                      "flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-tighter transition-all",
-                      provider === "openai" ? "bg-white/10 text-white" : "text-gray-600 hover:text-gray-400"
-                    )}
-                  >
-                    OpenAI
-                  </button>
-                </div>
-              </div>
+               </div>
 
-              <div className="space-y-2">
-                <label className="text-[10px] text-gray-500 uppercase tracking-widest font-black">Custom Model ID (Playground)</label>
-                <input 
-                  type="text"
-                  value={customModelId}
-                  onChange={(e) => setCustomModelId(e.target.value)}
-                  placeholder="e.g. tunedModels/legal-pro-v1"
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-xs focus:outline-none focus:ring-1 focus:ring-orange-500/50"
-                />
-              </div>
-
-              <div className="p-5 bg-orange-500/5 rounded-3xl border border-orange-500/10">
-                <p className="text-[11px] text-orange-400/80 leading-relaxed font-medium">
-                  Using custom models from AI Studio Playground allows for highly specialized legal reasoning.
-                </p>
-              </div>
+               <button 
+                 onClick={isRecording ? stopRecording : startRecording}
+                 className={cn(
+                   "p-4 md:p-5 border rounded-full transition-all active:scale-95 shadow-2xl",
+                   isRecording 
+                    ? "bg-red-500/20 border-red-500 text-red-500 animate-pulse" 
+                    : "bg-white/5 border-white/5 text-gray-500 hover:text-orange-500"
+                 )}
+               >
+                  {isRecording ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+               </button>
             </div>
-            
-            <button 
-              onClick={() => setShowSettings(false)}
-              className="w-full mt-8 py-4 bg-orange-600 hover:bg-orange-700 rounded-2xl text-xs font-black tracking-widest uppercase transition-all shadow-xl shadow-orange-600/20"
-            >
-              Apply Changes
-            </button>
-          </motion.div>
-        </motion.div>
-      )}
-    </div>
+            {isTranscribing && (
+              <div className="flex justify-center mt-2">
+                <span className="text-[10px] text-orange-500/60 uppercase font-black tracking-widest animate-pulse italic">Transcribing Counsel...</span>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+
+      {/* Settings Overlay - Lazy Loaded */}
+      <AnimatePresence>
+        {showSettings && (
+          <Suspense fallback={null}>
+            <SettingsOverlay 
+              onClose={() => setShowSettings(false)}
+              provider={provider}
+              setProvider={setProvider}
+              clientProfile={clientProfile}
+              setClientProfile={setClientProfile}
+              customModelId={customModelId}
+              setCustomModelId={setCustomModelId}
+            />
+          </Suspense>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
