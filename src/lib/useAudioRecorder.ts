@@ -3,10 +3,12 @@ import { useState, useRef } from "react";
 export function useAudioRecorder() {
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
   const startRecording = async () => {
+    setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -29,6 +31,7 @@ export function useAudioRecorder() {
       setIsRecording(true);
     } catch (err) {
       console.error("Failed to start recording", err);
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -41,11 +44,13 @@ export function useAudioRecorder() {
 
   const clearAudio = () => {
     setAudioBlob(null);
+    setError(null);
   };
 
   return {
     isRecording,
     audioBlob,
+    error,
     startRecording,
     stopRecording,
     clearAudio

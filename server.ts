@@ -18,23 +18,39 @@ async function startServer() {
 
   // API Route for Gemini (Server-side to protect key)
   app.post("/api/chat", async (req, res) => {
-    const { messages, systemInstruction, tools, customModelId } = req.body;
+    const { messages, systemInstruction, tools, customModelId, attachments } = req.body;
     
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
+    // Support custom key name as requested, with fallback to standard platform name
+    const apiKey = process.env.Gemini_API_Key1 || process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({ error: "Gemini API Key is not configured on the server. Please set Gemini_API_Key1 in settings." });
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: apiKey });
       const history = messages.slice(0, -1).map((m: any) => ({
         role: m.role === "user" ? "user" : "model",
         parts: [{ text: m.content }]
       }));
-      const lastMessage = messages[messages.length - 1].content;
+      
+      const lastMessageText = messages[messages.length - 1].content;
+      const lastMessageParts: any[] = [{ text: lastMessageText }];
+
+      if (attachments && attachments.length > 0) {
+        attachments.forEach((file: any) => {
+          lastMessageParts.push({
+            inlineData: {
+              data: file.data,
+              mimeType: file.type
+            }
+          });
+        });
+      }
 
       const response = await ai.models.generateContent({
         model: customModelId || "gemini-3-flash-preview",
-        contents: [...history, { role: "user", parts: [{ text: lastMessage }] }],
+        contents: [...history, { role: "user", parts: lastMessageParts }],
         config: {
           systemInstruction: systemInstruction,
           temperature: 0.5,
@@ -91,12 +107,13 @@ async function startServer() {
   app.post("/api/speech", async (req, res) => {
     const { text } = req.body;
     
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
+    const apiKey = process.env.Gemini_API_Key1 || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "Gemini API Key is not configured on the server." });
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: apiKey });
       
       const response = await ai.models.generateContent({
         model: "gemini-3.1-flash-tts-preview",
@@ -123,12 +140,13 @@ async function startServer() {
   app.post("/api/stt", async (req, res) => {
     const { audioData, mimeType } = req.body;
     
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
+    const apiKey = process.env.Gemini_API_Key1 || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "Gemini API Key is not configured on the server." });
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: apiKey });
 
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",

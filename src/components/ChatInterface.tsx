@@ -56,6 +56,7 @@ Cross-reference the Bharatiya Nyaya Sanhita (BNS) 2023 with old IPC sections to 
 Evidence and Counter-Litigation:
 Guide the user in documenting harassment and collecting evidence of innocence.
 Advise on potential counter-litigation strategies such as defamation or mental cruelty charges where applicable.
+You are equipped with multi-modal capabilities: you can analyze images of evidence, transcribing documents, and interpret legal paperwork uploaded by the user to provide more precise strategy.
 
 Research and Verification:
 For every legal or procedural query, perform a web search to verify the latest laws, Supreme Court judgments, and government notifications.
@@ -197,10 +198,55 @@ export default function ChatInterface() {
     "Maintain courtroom authority; prioritize evidence mastery and strategy.",
   ]);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<{ name: string, type: string, data: string }[]>([]);
   
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const { isRecording, audioBlob, startRecording, stopRecording, clearAudio } = useAudioRecorder();
+
+  // ... (useAudioRecorder call unchanged)
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>, autoSend = false) => {
+    const files = Array.from(e.target.files || []) as File[];
+    const processedFiles: { name: string, type: string, data: string }[] = [];
+    let processedCount = 0;
+
+    if (files.length === 0) return;
+
+    files.forEach((file: File) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        const fileObj = {
+          name: file.name,
+          type: file.type,
+          data: base64
+        };
+        processedFiles.push(fileObj);
+        setUploadedFiles(prev => [...prev, fileObj]);
+        
+        processedCount++;
+        if (processedCount === files.length && autoSend) {
+          triggerAutoAnalysis(processedFiles);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const triggerAutoAnalysis = async (files: { name: string, type: string, data: string }[]) => {
+    // Automatically send a message indicating analysis of these files
+    const autoInput = "Please analyze and transcribe these uploaded documents/images for legal evidence and strategy.";
+    setInput(autoInput);
+    // We need to wait a tiny bit for state to update or just pass files directly to a variation of handleSend
+    handleSend(autoInput, files);
+  };
+
+  const removeFile = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+  const { isRecording, audioBlob, error: recordingError, startRecording, stopRecording, clearAudio } = useAudioRecorder();
 
   // Cache profile and chats
   useEffect(() => {
@@ -343,17 +389,20 @@ export default function ChatInterface() {
     }
   }, [messages, isTyping]);
 
-  const handleSend = async () => {
-    if (!input.trim() || isTyping) return;
+  const handleSend = async (overrideInput?: string, overrideFiles?: { name: string, type: string, data: string }[]) => {
+    const finalInput = overrideInput || input;
+    const finalFiles = overrideFiles || uploadedFiles;
 
-    const userMessage: Message = { role: "user", content: input };
+    if (!finalInput.trim() || isTyping) return;
+
+    const userMessage: Message = { role: "user", content: finalInput };
     const isFirstUserMessage = messages.length === 1; // Initial message is from assistant
 
     if (isFirstUserMessage && (currentChatId.startsWith("new_") || currentChat.title === "New Consultation")) {
       setChats(prev => prev.map(c => {
         if (c.id === currentChatId) {
           // Truncate input for title
-          const title = input.length > 30 ? input.substring(0, 30) + "..." : input;
+          const title = finalInput.length > 30 ? finalInput.substring(0, 30) + "..." : finalInput;
           return { ...c, title };
         }
         return c;
@@ -361,6 +410,10 @@ export default function ChatInterface() {
     }
 
     setMessages(prev => [...prev, userMessage]);
+    const filesToSend = [...finalFiles];
+    if (!overrideFiles) setUploadedFiles([]);
+    else setUploadedFiles(prev => prev.filter(f => !finalFiles.includes(f)));
+
     setInput("");
     setIsTyping(true);
     setOrbStatus("thinking");
@@ -373,6 +426,7 @@ export default function ChatInterface() {
         provider,
         customModelId,
         systemInstruction: combinedPrompt,
+        attachments: filesToSend,
         tools: [
           {
             name: "get_client_profile",
@@ -493,6 +547,8 @@ export default function ChatInterface() {
         isOpen={isSidebarOpen}
         onNewChat={handleNewChat}
         onOpenSettings={() => {setShowSettings(true); if (isMobile) setIsSidebarOpen(false)}}
+        onUploadClick={() => fileInputRef.current?.click()}
+        onVoiceClick={isRecording ? stopRecording : startRecording}
         customInstructions={customInstructions}
         setCustomInstructions={setCustomInstructions}
         isMobile={isMobile}
@@ -657,16 +713,43 @@ export default function ChatInterface() {
                     )}>
                       {msg.content}
                       {msg.role === "assistant" && (
-                        <div className="absolute -right-12 bottom-0 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                        <div className={cn(
+                          "absolute flex flex-col gap-2 transition-all",
+                          isMobile 
+                            ? "-bottom-12 right-0 flex-row opacity-100 pb-2" 
+                            : "-right-12 bottom-0 opacity-0 group-hover:opacity-100"
+                        )}>
                           <button 
                             onClick={() => handleSpeech(msg.content, i)}
                             className={cn(
                               "p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all",
                               isPlayingId === i && "text-orange-500 scale-110"
                             )}
+                            title="Speak Advice"
                           >
                             <Volume2 className={cn("w-4 h-4", isPlayingId === i && "animate-pulse")} />
                           </button>
+
+                          {isPlayingId === i && (
+                            <button 
+                              onClick={() => {
+                                if (isPaused) {
+                                  audioRef.current?.play();
+                                  setIsPaused(false);
+                                  setOrbStatus("speaking");
+                                } else {
+                                  audioRef.current?.pause();
+                                  setIsPaused(true);
+                                  setOrbStatus("idle");
+                                }
+                              }}
+                              className="p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all text-orange-400"
+                              title={isPaused ? "Resume" : "Pause"}
+                            >
+                              {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                            </button>
+                          )}
+
                           <button 
                             onClick={() => handleDownloadDoc(msg.content)}
                             className="p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all text-gray-400 hover:text-orange-500"
@@ -731,10 +814,83 @@ export default function ChatInterface() {
 
           {/* Input Bar Section */}
           <div className="w-full max-w-3xl p-4 md:pb-8 z-10">
+            {/* File Previews & Transcribing State */}
+            <AnimatePresence>
+              {(uploadedFiles.length > 0 || isTranscribing) && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="flex flex-col gap-2 mb-3 bg-black/60 backdrop-blur-3xl p-3 rounded-2xl border border-white/10 shadow-2xl"
+                >
+                  <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                    {uploadedFiles.map((file, idx) => (
+                      <div key={idx} className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
+                        {file.type.startsWith("image/") ? (
+                          <div className="w-5 h-5 rounded overflow-hidden bg-black shrink-0">
+                            <img src={`data:${file.type};base64,${file.data}`} alt="preview" className="w-full h-full object-cover" />
+                          </div>
+                        ) : (
+                          <FileText className="w-3 h-3 text-orange-400" />
+                        )}
+                        <span className="text-[10px] font-bold text-gray-300 truncate max-w-[100px]">{file.name}</span>
+                        {!isTranscribing && (
+                          <button onClick={() => removeFile(idx)} className="text-gray-500 hover:text-red-500 transition-colors">
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {(isTranscribing || (isTyping && messages[messages.length-1]?.role === 'user')) && uploadedFiles.length > 0 && (
+                    <div className="flex items-center gap-2 px-1 border-t border-white/5 pt-2 mt-1">
+                      <Loader2 className="w-3 h-3 text-orange-500 animate-spin" />
+                      <span className="text-[9px] font-black uppercase tracking-widest text-orange-500/80 italic">
+                        Processing Evidence...
+                      </span>
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             <div className="relative flex items-center gap-2">
-               <button className="p-4 bg-white/5 hover:bg-white/10 rounded-full transition-all text-gray-500 hover:text-white border border-white/5 shadow-xl sm:flex hidden">
+               <input 
+                 type="file" 
+                 ref={fileInputRef} 
+                 onChange={(e) => handleFileSelect(e, false)} 
+                 className="hidden" 
+                 multiple
+                 accept="image/*,application/pdf,text/plain"
+               />
+               
+               <button 
+                 onClick={() => fileInputRef.current?.click()}
+                 className="p-4 bg-white/5 hover:bg-white/10 rounded-full transition-all text-gray-400 hover:text-white border border-white/5 shadow-xl flex"
+                 title="Add Evidence"
+               >
                  <Plus className="w-5 h-5" />
                </button>
+
+               <div className="hidden sm:flex gap-2">
+                <button 
+                  onClick={() => {
+                    const el = fileInputRef.current;
+                    if (el) {
+                      const newHandler = (e: any) => {
+                        handleFileSelect(e, true);
+                        el.removeEventListener('change', newHandler);
+                      };
+                      el.addEventListener('change', newHandler);
+                      el.click();
+                    }
+                  }}
+                  className="px-4 py-2 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-500/30 rounded-full transition-all text-orange-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 whitespace-nowrap shadow-lg active:scale-95"
+                >
+                  <Plus className="w-4 h-4" />
+                  Upload & Analyze
+                </button>
+               </div>
 
                <div className="flex-1 relative group">
                   <input 
@@ -769,6 +925,14 @@ export default function ChatInterface() {
             {isTranscribing && (
               <div className="flex justify-center mt-2">
                 <span className="text-[10px] text-orange-500/60 uppercase font-black tracking-widest animate-pulse italic">Transcribing Counsel...</span>
+              </div>
+            )}
+            {recordingError && (
+              <div className="flex justify-center mt-2">
+                <span className="text-[10px] text-red-500 uppercase font-black tracking-widest italic flex items-center gap-2">
+                  <MicOff className="w-3 h-3" />
+                  Recording Error: {recordingError} (Check microphone permissions)
+                </span>
               </div>
             )}
           </div>

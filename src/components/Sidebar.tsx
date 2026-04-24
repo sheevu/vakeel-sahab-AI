@@ -39,6 +39,8 @@ interface SidebarProps {
   isOpen: boolean;
   onNewChat: () => void;
   onOpenSettings: () => void;
+  onUploadClick?: () => void;
+  onVoiceClick?: () => void;
   customInstructions: string[];
   setCustomInstructions: (instructions: string[]) => void;
   isMobile?: boolean;
@@ -117,6 +119,8 @@ export default function Sidebar({
   isOpen, 
   onNewChat, 
   onOpenSettings,
+  onUploadClick,
+  onVoiceClick,
   customInstructions,
   setCustomInstructions,
   isMobile = false,
@@ -363,7 +367,7 @@ export default function Sidebar({
           {(!isCollapsed || isMobile) && (
             <div className="grid grid-cols-3 gap-3">
               <button 
-                onClick={() => {/* Trigger upload */}}
+                onClick={onUploadClick}
                 className="flex flex-col items-center justify-center gap-2 p-4 rounded-[2rem] bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all active:scale-95 group border border-white/5 shadow-lg"
               >
                 <div className="w-10 h-10 rounded-full bg-orange-600/10 flex items-center justify-center group-hover:bg-orange-600/20 transition-colors">
@@ -373,7 +377,7 @@ export default function Sidebar({
               </button>
               
               <button 
-                onClick={() => {/* Trigger voice */}}
+                onClick={onVoiceClick}
                 className="flex flex-col items-center justify-center gap-2 p-4 rounded-[2rem] bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all active:scale-95 group border border-white/5 shadow-lg"
               >
                 <div className="w-10 h-10 rounded-full bg-orange-600/10 flex items-center justify-center group-hover:bg-orange-600/20 transition-colors">

@@ -18,6 +18,7 @@ export async function getAICompletion(
     systemInstruction?: string;
     tools?: any[];
     customModelId?: string;
+    attachments?: { name: string, type: string, data: string }[];
   }
 ): Promise<AIResponse> {
   const endpoint = options.provider === "gemini" ? "/api/chat" : "/api/openai";
@@ -33,7 +34,8 @@ export async function getAICompletion(
             : messages),
       systemInstruction: options.systemInstruction,
       tools: options.tools,
-      customModelId: options.customModelId
+      customModelId: options.customModelId,
+      attachments: options.attachments
     }),
   });
 
