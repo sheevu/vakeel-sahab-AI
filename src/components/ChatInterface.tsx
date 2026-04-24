@@ -199,6 +199,85 @@ export default function ChatInterface() {
   ]);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<{ name: string, type: string, data: string }[]>([]);
+  const [isLiveDictating, setIsLiveDictating] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [documentType, setDocumentType] = useState("general");
+  const recognitionRef = useRef<any>(null);
+
+  const filteredMessages = useMemo(() => {
+    if (!searchQuery.trim()) return messages;
+    return messages.filter(msg =>
+      msg.content.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [messages, searchQuery]);
+
+  useEffect(() => {
+    // Initialize speech recognition
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-IN'; // Default to Hinglish-friendly English
+
+      recognition.onresult = (event: any) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+        
+        // Update input with the dictation
+        setInput(prev => prev + finalTranscript + interimTranscript);
+        
+        // Check for commands
+        const text = (finalTranscript + interimTranscript).toLowerCase();
+        if (text.includes("send message") || text.includes("send this")) {
+          handleSend();
+          stopLiveDictation();
+        } else if (text.includes("stop recording")) {
+          stopLiveDictation();
+        } else if (text.includes("open settings")) {
+          setShowSettings(true);
+          stopLiveDictation();
+        } else if (text.includes("open search") || text.includes("search messages")) {
+          setIsSearchOpen(true);
+          stopLiveDictation();
+        } else if (text.includes("clear chat") || text.includes("clear history")) {
+          setMessages([INITIAL_MESSAGE]);
+          stopLiveDictation();
+        } else if (text.includes("switch to") || text.includes("set document type to")) {
+          const typeMatch = text.match(/(?:switch to|set document type to)\s+(.+)/);
+          if (typeMatch && typeMatch[1]) {
+            setDocumentType(typeMatch[1].trim());
+            console.log("Document type switched to:", typeMatch[1].trim());
+          }
+          stopLiveDictation();
+        }
+      };
+      
+      recognitionRef.current = recognition;
+    }
+  }, []);
+
+  const startLiveDictation = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.start();
+      setIsLiveDictating(true);
+    }
+  };
+
+  const stopLiveDictation = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsLiveDictating(false);
+    }
+  };
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -390,19 +469,29 @@ export default function ChatInterface() {
   }, [messages, isTyping]);
 
   const handleSend = async (overrideInput?: string, overrideFiles?: { name: string, type: string, data: string }[]) => {
-    const finalInput = overrideInput || input;
-    const finalFiles = overrideFiles || uploadedFiles;
+    // If called as an event handler (i.e. first argument is an event)
+    let inputToUse = typeof overrideInput === 'string' ? overrideInput : input;
+    const filesToUse = Array.isArray(overrideFiles) ? overrideFiles : uploadedFiles;
+    
+    // Validation
+    const trimmedInput = inputToUse.trim();
+    if (!trimmedInput) return;
+    if (trimmedInput.length > 2000) {
+      alert("Please keep your message under 2000 characters.");
+      return;
+    }
+    inputToUse = trimmedInput;
+    
+    if (isTyping) return;
 
-    if (!finalInput.trim() || isTyping) return;
-
-    const userMessage: Message = { role: "user", content: finalInput };
+    const userMessage: Message = { role: "user", content: inputToUse };
     const isFirstUserMessage = messages.length === 1; // Initial message is from assistant
 
     if (isFirstUserMessage && (currentChatId.startsWith("new_") || currentChat.title === "New Consultation")) {
       setChats(prev => prev.map(c => {
         if (c.id === currentChatId) {
           // Truncate input for title
-          const title = finalInput.length > 30 ? finalInput.substring(0, 30) + "..." : finalInput;
+          const title = inputToUse.length > 30 ? inputToUse.substring(0, 30) + "..." : inputToUse;
           return { ...c, title };
         }
         return c;
@@ -410,9 +499,9 @@ export default function ChatInterface() {
     }
 
     setMessages(prev => [...prev, userMessage]);
-    const filesToSend = [...finalFiles];
+    const filesToSend = [...filesToUse];
     if (!overrideFiles) setUploadedFiles([]);
-    else setUploadedFiles(prev => prev.filter(f => !finalFiles.includes(f)));
+    else setUploadedFiles(prev => prev.filter(f => !filesToUse.includes(f)));
 
     setInput("");
     setIsTyping(true);
@@ -420,7 +509,7 @@ export default function ChatInterface() {
 
     try {
       const profileString = clientProfile ? `\n\nADVOCATE PROFILE:\nName: ${clientProfile.name || 'N/A'}\nSpecialization: ${clientProfile.specialization || 'N/A'}` : '';
-      const combinedPrompt = `${SYSTEM_PROMPT}${profileString}\n\nCUSTOM USER DIRECTIVES:\n${customInstructions.join("\n")}`;
+      const combinedPrompt = `${SYSTEM_PROMPT}${profileString}\n\nCURRENT DRAFTING TYPE: ${documentType}\n\nCUSTOM USER DIRECTIVES:\n${customInstructions.join("\n")}`;
       
       const response = await getAICompletion([...messages, userMessage], {
         provider,
@@ -459,7 +548,10 @@ export default function ChatInterface() {
               type: "OBJECT",
               properties: {
                 document_type: { type: "STRING" },
-                facts: { type: "STRING" }
+                facts: { type: "STRING" },
+                client_name: { type: "STRING" },
+                opposing_counsel: { type: "STRING" },
+                case_type: { type: "STRING" }
               },
               required: ["document_type", "facts"]
             }
@@ -619,6 +711,12 @@ export default function ChatInterface() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setIsSearchOpen(true)}
+              className="p-2.5 hover:bg-white/5 rounded-2xl transition-colors text-gray-500 hover:text-white border border-transparent hover:border-white/10"
+            >
+                <Search className="w-5 h-5" />
+            </button>
             <div className="hidden sm:flex px-3 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/20 text-[10px] uppercase tracking-widest text-orange-400 font-black shadow-inner">
               Supreme Court Edition
             </div>
@@ -630,6 +728,36 @@ export default function ChatInterface() {
             </button>
           </div>
         </header>
+
+        {isSearchOpen && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-3xl p-4 flex flex-col">
+                <div className="flex items-center gap-2 p-4 mb-4 border-b border-white/10">
+                    <Search className="w-5 h-5 text-gray-400" />
+                    <input 
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search messages..."
+                        className="flex-1 bg-transparent border-none text-white focus:outline-none placeholder:text-gray-600"
+                        autoFocus
+                    />
+                    <button onClick={() => { setIsSearchOpen(false); setSearchQuery(""); }} className="text-gray-400 hover:text-white">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                <div className="flex-1 overflow-y-auto space-y-4">
+                    {filteredMessages.map((msg, i) => (
+                        <div key={i} className="p-4 bg-white/5 rounded-2xl">
+                             <div className="text-xs text-orange-500 font-bold mb-1 uppercase">{msg.role}</div>
+                             <div className="text-sm text-gray-200">{msg.content}</div>
+                        </div>
+                    ))}
+                    {filteredMessages.length === 0 && (
+                        <div className="text-gray-500 text-center mt-10">No messages found.</div>
+                    )}
+                </div>
+            </div>
+        )}
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-hidden relative flex flex-col items-center">
@@ -793,6 +921,7 @@ export default function ChatInterface() {
                 </div>
               </motion.div>
             )}
+            <div className="h-24 w-full" />
           </div>
 
           {/* Action Suggestion Grid */}
@@ -813,7 +942,8 @@ export default function ChatInterface() {
           </AnimatePresence>
 
           {/* Input Bar Section */}
-          <div className="w-full max-w-3xl p-4 md:pb-8 z-10">
+          <div className="fixed bottom-0 left-0 w-full z-20 bg-black/80 backdrop-blur-3xl pb-4">
+            <div className="w-full max-w-3xl mx-auto p-4">
             {/* File Previews & Transcribing State */}
             <AnimatePresence>
               {(uploadedFiles.length > 0 || isTranscribing) && (
@@ -864,15 +994,7 @@ export default function ChatInterface() {
                  accept="image/*,application/pdf,text/plain"
                />
                
-               <button 
-                 onClick={() => fileInputRef.current?.click()}
-                 className="p-4 bg-white/5 hover:bg-white/10 rounded-full transition-all text-gray-400 hover:text-white border border-white/5 shadow-xl flex"
-                 title="Add Evidence"
-               >
-                 <Plus className="w-5 h-5" />
-               </button>
-
-               <div className="hidden sm:flex gap-2">
+               <div className="flex gap-2">
                 <button 
                   onClick={() => {
                     const el = fileInputRef.current;
@@ -885,10 +1007,10 @@ export default function ChatInterface() {
                       el.click();
                     }
                   }}
-                  className="px-4 py-2 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-500/30 rounded-full transition-all text-orange-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 whitespace-nowrap shadow-lg active:scale-95"
+                  className="p-4 sm:px-4 sm:py-2 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-500/30 rounded-full sm:rounded-full transition-all text-orange-500 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 whitespace-nowrap shadow-lg active:scale-95"
                 >
-                  <Plus className="w-4 h-4" />
-                  Upload & Analyze
+                  <Plus className="w-5 h-5 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">Upload & Analyze</span>
                 </button>
                </div>
 
@@ -899,14 +1021,24 @@ export default function ChatInterface() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleSend()}
                     placeholder="Ask Vakeel Sahab..."
-                    className="w-full bg-white/5 border border-white/5 backdrop-blur-3xl rounded-[2rem] px-6 md:px-8 py-4 md:py-5 pr-14 md:pr-16 text-base md:text-sm focus:outline-none focus:bg-white/10 transition-all text-gray-200 placeholder:text-gray-600 shadow-2xl"
+                    className="w-full bg-white/5 border border-white/5 backdrop-blur-3xl rounded-[2rem] px-6 md:px-8 py-5 md:py-5 pr-14 md:pr-16 text-base md:text-sm focus:outline-none focus:bg-white/10 transition-all text-gray-200 placeholder:text-gray-600 shadow-2xl"
                   />
                   <button 
-                    onClick={handleSend}
-                    disabled={!input.trim() || isTyping}
-                    className="absolute right-2 md:right-3 top-1.5 md:top-2.5 p-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 rounded-2xl transition-all shadow-xl"
+                    onClick={isLiveDictating ? stopLiveDictation : startLiveDictation}
+                    className={cn(
+                      "absolute right-16 md:right-16 top-2 md:top-2.5 p-3 md:p-3 rounded-2xl transition-all shadow-xl",
+                      isLiveDictating ? "bg-red-600 hover:bg-red-700 animate-pulse" : "bg-white/5 hover:bg-white/10 text-gray-400"
+                    )}
+                    title={isLiveDictating ? "Stop Dictation" : "Start Live Dictation"}
                   >
-                    <Send className="w-4 h-4 text-white" />
+                    <Mic className={cn("w-5 h-5 md:w-4 md:h-4", isLiveDictating ? "text-white" : "")} />
+                  </button>
+                  <button 
+                    onClick={() => handleSend()}
+                    disabled={!input.trim() || isTyping}
+                    className="absolute right-2 md:right-3 top-2 md:top-2.5 p-3 md:p-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 rounded-2xl transition-all shadow-xl"
+                  >
+                    <Send className="w-5 h-5 md:w-4 md:h-4 text-white" />
                   </button>
                </div>
 
@@ -935,6 +1067,7 @@ export default function ChatInterface() {
                 </span>
               </div>
             )}
+            </div>
           </div>
         </main>
       </div>

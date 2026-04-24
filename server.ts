@@ -16,15 +16,57 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Helper for Gemini Key Rotation
+  const geminiKeys = [
+    process.env.GEMINI_API_KEY,
+    process.env.Gemini_API_Key1
+  ].filter(Boolean) as string[];
+  
+  let currentGeminiIndex = 0;
+
+  function getNextGeminiKey() {
+    if (geminiKeys.length === 0) return null;
+    const key = geminiKeys[currentGeminiIndex];
+    currentGeminiIndex = (currentGeminiIndex + 1) % geminiKeys.length;
+    return key;
+  }
+
   // API Route for Gemini (Server-side to protect key)
   app.post("/api/chat", async (req, res) => {
     const { messages, systemInstruction, tools, customModelId, attachments } = req.body;
     
-    // Support custom key name as requested, with fallback to standard platform name
-    const apiKey = process.env.Gemini_API_Key1 || process.env.GEMINI_API_KEY;
+    // Choose between Gemini and OpenAI randomly to distribute load
+    const canUseOpenAI = !!process.env.OPENAI_API_KEY;
+    const hasComplexFeatures = (tools?.length > 0) || (attachments?.length > 0);
+    const useOpenAI = canUseOpenAI && !hasComplexFeatures && Math.random() > 0.5;
 
+    if (useOpenAI) {
+      try {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: customModelId || "gpt-4o",
+            messages,
+            temperature: 0.5,
+          }),
+        });
+
+        const data = await response.json();
+        if (data.choices && data.choices[0]) {
+            return res.json({ text: data.choices[0].message.content });
+        }
+      } catch (error) {
+        console.error("OpenAI fallback failed, using Gemini:", error);
+      }
+    }
+
+    const apiKey = getNextGeminiKey();
     if (!apiKey) {
-      return res.status(500).json({ error: "Gemini API Key is not configured on the server. Please set Gemini_API_Key1 in settings." });
+      return res.status(500).json({ error: "No Gemini API Key is configured on the server." });
     }
 
     try {
@@ -69,6 +111,7 @@ async function startServer() {
       });
     } catch (error) {
       console.error("Gemini Proxy Error:", error);
+      // Fallback: try next key?
       res.status(500).json({ error: "Failed to fetch from Gemini." });
     }
   });
@@ -107,9 +150,9 @@ async function startServer() {
   app.post("/api/speech", async (req, res) => {
     const { text } = req.body;
     
-    const apiKey = process.env.Gemini_API_Key1 || process.env.GEMINI_API_KEY;
+    const apiKey = getNextGeminiKey();
     if (!apiKey) {
-      return res.status(500).json({ error: "Gemini API Key is not configured on the server." });
+      return res.status(500).json({ error: "No Gemini API Key is configured on the server." });
     }
 
     try {
@@ -140,9 +183,9 @@ async function startServer() {
   app.post("/api/stt", async (req, res) => {
     const { audioData, mimeType } = req.body;
     
-    const apiKey = process.env.Gemini_API_Key1 || process.env.GEMINI_API_KEY;
+    const apiKey = getNextGeminiKey();
     if (!apiKey) {
-      return res.status(500).json({ error: "Gemini API Key is not configured on the server." });
+      return res.status(500).json({ error: "No Gemini API Key is configured on the server." });
     }
 
     try {
