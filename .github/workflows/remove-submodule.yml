@@ -1,0 +1,25 @@
+name: Remove temp_dataset submodule
+
+on:
+  workflow_dispatch:
+
+jobs:
+  remove-submodule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Remove temp_dataset submodule
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Actions"
+          git rm --cached temp_dataset || true
+          rm -rf temp_dataset
+          git rm -f .gitmodules || true
+          git add -A
+          git diff --cached --quiet || git commit -m "fix: remove temp_dataset submodule for Cloudflare build"
+          git push
