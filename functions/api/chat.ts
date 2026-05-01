@@ -188,15 +188,68 @@ PRIORITY HIERARCHY:
 3. Statutory Acts: Specific section numbers and clauses.
 `;
 
-export const onRequestPost: PagesFunction<Env> = async (context) => {
-  const { request, env } = context;
-  const body = await request.json() as any;
+  async function searchLegalDatabase(d1: D1Database, query: string) {
+    try {
+      // Search acts and judgments using Full-Text Search
+      const results = await d1.prepare(`
+        SELECT content, act_name || ' Section ' || section_number as source 
+        FROM acts 
+        WHERE id IN (SELECT rowid FROM legal_search_index WHERE legal_search_index MATCH ?)
+        LIMIT 3
+      `).bind(query).all();
+      
+      return results.results.map(r => `SOURCE: ${r.source}\nCONTENT: ${r.content}`).join("\n\n");
+    } catch (e) {
+      console.error("DB Search Error", e);
+      return "";
+    }
+  }
 
-  // ... existing parsing logic ...
+  async function checkSemanticCache(d1: D1Database, query: string) {
+    try {
+      const cached = await d1.prepare("SELECT ai_response FROM semantic_cache WHERE user_query LIKE ? LIMIT 1")
+        .bind(`%${query}%`)
+        .first<{ ai_response: string }>();
+      return cached?.ai_response;
+    } catch {
+      return null;
+    }
+  }
 
-  const baseSystemPrompt = `You are Vakeel Sahab GPT, an elite AI legal strategist modeled as a Senior Advocate of the Supreme Court of India.
+  export const onRequestPost: PagesFunction<Env> = async (context) => {
+    const { request, env } = context;
+    const body = await request.json() as any;
+    const d1 = env.vakeel_db;
+
+    const messages = parseMessages(body?.messages);
+    if (!messages) {
+      return new Response(JSON.stringify({ error: "Invalid payload." }), { status: 400 });
+    }
+
+    const lastQuery = messages[messages.length - 1].content;
+
+    // 1. Reduce Token Burn: Check Cache First
+    if (d1) {
+      const cachedResponse = await checkSemanticCache(d1, lastQuery);
+      if (cachedResponse) {
+        return new Response(JSON.stringify({ text: cachedResponse, isCached: true }), {
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+
+    // 2. Reduce Token Burn: Search Legal Database for Context
+    let dbContext = "";
+    if (d1) {
+      dbContext = await searchLegalDatabase(d1, lastQuery);
+    }
+
+    const baseSystemPrompt = `You are Vakeel Sahab GPT, an elite AI legal strategist modeled as a Senior Advocate of the Supreme Court of India.
 Communication Style: Professional, authoritative, yet accessible. Use "Hinglish" where appropriate.
-${LEGAL_LOGIC}`;
+${LEGAL_LOGIC}
+
+${dbContext ? `PROVEN LEGAL CONTEXT (Use this to avoid general guesses):\n${dbContext}` : ""}
+`;
 
   const systemInstruction = isNonEmptyString(body?.systemInstruction) 
     ? `${baseSystemPrompt}\n\nUser Context: ${body.systemInstruction}` 

@@ -26,7 +26,7 @@ import {
   X,
   MicOff,
   ChevronLeft,
-  ChevronRight
+  CheckCircle2
 } from "lucide-react";
 import Orb from "./Orb";
 import Sidebar from "./Sidebar";
@@ -36,6 +36,7 @@ import { useAudioRecorder } from "../lib/useAudioRecorder";
 import { useIsMobile } from "../lib/useIsMobile";
 
 const SettingsOverlay = lazy(() => import("./SettingsOverlay"));
+const TrainingPortal = lazy(() => import("./TrainingPortal"));
 
 const SYSTEM_PROMPT = `Purpose and Goals:
 Act as a legendary Senior Advocate of the Supreme Court of India, providing high-level legal strategy and documentation support.
@@ -197,6 +198,7 @@ export default function ChatInterface() {
     return saved ? JSON.parse(saved) : null;
   });
   const [showSettings, setShowSettings] = useState(false);
+  const [showTraining, setShowTraining] = useState(false);
   const [isPlayingId, setIsPlayingId] = useState<number | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
@@ -663,7 +665,11 @@ export default function ChatInterface() {
       });
 
       setOrbStatus("speaking");
-      setMessages(prev => [...prev, { role: "assistant", content: response.text }]);
+      setMessages(prev => [...prev, { 
+        role: "assistant", 
+        content: response.text,
+        isCached: (response as any).isCached 
+      }]);
       
       // Handle tool calls visually
       if (response.toolCalls?.length) {
@@ -816,6 +822,13 @@ export default function ChatInterface() {
               Supreme Court Edition
             </div>
             <button 
+              onClick={() => setShowTraining(true)}
+              className="p-2.5 hover:bg-orange-500/10 rounded-2xl transition-colors text-orange-500 hover:text-orange-400 border border-transparent hover:border-orange-500/20"
+              title="Train AI Brain"
+            >
+                <Database className="w-5 h-5" />
+            </button>
+            <button 
               onClick={() => setShowSettings(true)}
               className="p-2.5 hover:bg-white/5 rounded-2xl transition-colors text-gray-500 hover:text-white border border-transparent hover:border-white/10"
             >
@@ -935,6 +948,12 @@ export default function ChatInterface() {
                         ? "bg-orange-600/90 text-white rounded-tr-none" 
                         : "bg-black/60 backdrop-blur-3xl border border-white/10 rounded-tl-none text-gray-100"
                     )}>
+                      {(msg as any).isCached && (
+                        <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-green-500/10 border border-green-500/20 rounded-lg w-fit">
+                          <CheckCircle2 className="w-3 h-3 text-green-500" />
+                          <span className="text-[10px] font-black uppercase tracking-widest text-green-400">Database Verified</span>
+                        </div>
+                      )}
                       {msg.content}
                       {msg.role === "assistant" && (
                         <div className={cn(
@@ -1211,6 +1230,14 @@ export default function ChatInterface() {
               customModelId={customModelId}
               setCustomModelId={setCustomModelId}
             />
+          </Suspense>
+        )}
+      </AnimatePresence>
+      {/* Training Portal Overlay */}
+      <AnimatePresence>
+        {showTraining && (
+          <Suspense fallback={null}>
+            <TrainingPortal onClose={() => setShowTraining(false)} />
           </Suspense>
         )}
       </AnimatePresence>

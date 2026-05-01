@@ -24,6 +24,20 @@ function normalizeMessageRole(role) {
   return role === "user" ? "user" : "model";
 }
 __name(normalizeMessageRole, "normalizeMessageRole");
+function parseMessages(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const parsed = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const role = item.role;
+    const content = item.content;
+    if (!isNonEmptyString(content)) return null;
+    if (role !== "user" && role !== "assistant" && role !== "system") return null;
+    parsed.push({ role, content });
+  }
+  return parsed;
+}
+__name(parseMessages, "parseMessages");
 function parseAttachments(value) {
   if (value === void 0) return [];
   if (!Array.isArray(value)) return [];
@@ -41,17 +55,17 @@ function parseAttachments(value) {
 __name(parseAttachments, "parseAttachments");
 async function callGeminiModel({
   apiKey,
-  messages: messages2,
+  messages,
   systemInstruction,
   tools,
   customModelId,
   attachments
 }) {
-  const history = messages2.slice(0, -1).map((m) => ({
+  const history = messages.slice(0, -1).map((m) => ({
     role: normalizeMessageRole(m.role),
     parts: [{ text: m.content }]
   }));
-  const lastMessageText = messages2[messages2.length - 1].content;
+  const lastMessageText = messages[messages.length - 1].content;
   const lastMessageParts = [{ text: lastMessageText }];
   if (attachments.length > 0) {
     attachments.forEach((file) => {
@@ -104,11 +118,11 @@ async function callGeminiModel({
 __name(callGeminiModel, "callGeminiModel");
 async function callOpenAIModel({
   apiKey,
-  messages: messages2,
+  messages,
   customModelId,
   systemInstruction
 }) {
-  const openAIMessages = systemInstruction ? [{ role: "system", content: systemInstruction }, ...messages2] : messages2;
+  const openAIMessages = systemInstruction ? [{ role: "system", content: systemInstruction }, ...messages] : messages;
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -141,12 +155,59 @@ PRIORITY HIERARCHY:
 2. 373 Landmark Judgments: Foundational interpretations.
 3. Statutory Acts: Specific section numbers and clauses.
 `;
+async function searchLegalDatabase(d1, query) {
+  try {
+    const results = await d1.prepare(`
+        SELECT content, act_name || ' Section ' || section_number as source 
+        FROM acts 
+        WHERE id IN (SELECT rowid FROM legal_search_index WHERE legal_search_index MATCH ?)
+        LIMIT 3
+      `).bind(query).all();
+    return results.results.map((r) => `SOURCE: ${r.source}
+CONTENT: ${r.content}`).join("\n\n");
+  } catch (e) {
+    console.error("DB Search Error", e);
+    return "";
+  }
+}
+__name(searchLegalDatabase, "searchLegalDatabase");
+async function checkSemanticCache(d1, query) {
+  try {
+    const cached = await d1.prepare("SELECT ai_response FROM semantic_cache WHERE user_query LIKE ? LIMIT 1").bind(`%${query}%`).first();
+    return cached?.ai_response;
+  } catch {
+    return null;
+  }
+}
+__name(checkSemanticCache, "checkSemanticCache");
 var onRequestPost2 = /* @__PURE__ */ __name(async (context) => {
   const { request, env } = context;
   const body = await request.json();
+  const d1 = env.vakeel_db;
+  const messages = parseMessages(body?.messages);
+  if (!messages) {
+    return new Response(JSON.stringify({ error: "Invalid payload." }), { status: 400 });
+  }
+  const lastQuery = messages[messages.length - 1].content;
+  if (d1) {
+    const cachedResponse = await checkSemanticCache(d1, lastQuery);
+    if (cachedResponse) {
+      return new Response(JSON.stringify({ text: cachedResponse, isCached: true }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+  let dbContext = "";
+  if (d1) {
+    dbContext = await searchLegalDatabase(d1, lastQuery);
+  }
   const baseSystemPrompt = `You are Vakeel Sahab GPT, an elite AI legal strategist modeled as a Senior Advocate of the Supreme Court of India.
 Communication Style: Professional, authoritative, yet accessible. Use "Hinglish" where appropriate.
-${LEGAL_LOGIC}`;
+${LEGAL_LOGIC}
+
+${dbContext ? `PROVEN LEGAL CONTEXT (Use this to avoid general guesses):
+${dbContext}` : ""}
+`;
   const systemInstruction = isNonEmptyString(body?.systemInstruction) ? `${baseSystemPrompt}
 
 User Context: ${body.systemInstruction}` : baseSystemPrompt;
@@ -204,15 +265,55 @@ User Context: ${body.systemInstruction}` : baseSystemPrompt;
   });
 }, "onRequestPost");
 
+// api/ingest.ts
+var onRequestPost3 = /* @__PURE__ */ __name(async (context) => {
+  const { request, env } = context;
+  const d1 = env.vakeel_db;
+  if (!d1) {
+    return new Response(JSON.stringify({ error: "Database not bound." }), { status: 500 });
+  }
+  try {
+    const body = await request.json();
+    const { type, data } = body;
+    if (type === "act") {
+      const { act_name, section_number, title, content } = data;
+      await d1.prepare(`
+        INSERT INTO acts (act_name, section_number, title, content) 
+        VALUES (?, ?, ?, ?)
+      `).bind(act_name, section_number, title, content).run();
+      await d1.prepare(`
+        INSERT INTO legal_search_index (act_name, section_number, content) 
+        VALUES (?, ?, ?)
+      `).bind(act_name, section_number, content).run();
+    }
+    if (type === "judgment") {
+      const { case_name, citation, ratio_decidendi, summary } = data;
+      await d1.prepare(`
+        INSERT INTO judgments (case_name, citation, ratio_decidendi, summary) 
+        VALUES (?, ?, ?, ?)
+      `).bind(case_name, citation, ratio_decidendi, summary).run();
+      await d1.prepare(`
+        INSERT INTO legal_search_index (case_name, ratio_decidendi) 
+        VALUES (?, ?)
+      `).bind(case_name, ratio_decidendi).run();
+    }
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: String(error) }), { status: 500 });
+  }
+}, "onRequestPost");
+
 // api/openai.ts
 function isNonEmptyString2(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 __name(isNonEmptyString2, "isNonEmptyString");
-var onRequestPost3 = /* @__PURE__ */ __name(async (context) => {
+var onRequestPost4 = /* @__PURE__ */ __name(async (context) => {
   const { request, env } = context;
   const body = await request.json();
-  const messages2 = body?.messages;
+  const messages = body?.messages;
   const model = isNonEmptyString2(body?.model) ? body.model : "gpt-4o-mini";
   const temperature = typeof body?.temperature === "number" ? body.temperature : 0.7;
   if (!env.OPENAI_API_KEY) {
@@ -230,7 +331,7 @@ var onRequestPost3 = /* @__PURE__ */ __name(async (context) => {
       },
       body: JSON.stringify({
         model,
-        messages: messages2,
+        messages,
         temperature
       })
     });
@@ -259,7 +360,7 @@ function isNonEmptyString3(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 __name(isNonEmptyString3, "isNonEmptyString");
-var onRequestPost4 = /* @__PURE__ */ __name(async (context) => {
+var onRequestPost5 = /* @__PURE__ */ __name(async (context) => {
   const { request, env } = context;
   const body = await request.json();
   const text = body?.text;
@@ -324,7 +425,7 @@ function isNonEmptyString4(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 __name(isNonEmptyString4, "isNonEmptyString");
-var onRequestPost5 = /* @__PURE__ */ __name(async (context) => {
+var onRequestPost6 = /* @__PURE__ */ __name(async (context) => {
   const { request, env } = context;
   const body = await request.json();
   const audioData = body?.audioData;
@@ -404,25 +505,32 @@ var routes = [
     modules: [onRequestPost2]
   },
   {
-    routePath: "/api/openai",
+    routePath: "/api/ingest",
     mountPath: "/api",
     method: "POST",
     middlewares: [],
     modules: [onRequestPost3]
   },
   {
-    routePath: "/api/speech",
+    routePath: "/api/openai",
     mountPath: "/api",
     method: "POST",
     middlewares: [],
     modules: [onRequestPost4]
   },
   {
-    routePath: "/api/stt",
+    routePath: "/api/speech",
     mountPath: "/api",
     method: "POST",
     middlewares: [],
     modules: [onRequestPost5]
+  },
+  {
+    routePath: "/api/stt",
+    mountPath: "/api",
+    method: "POST",
+    middlewares: [],
+    modules: [onRequestPost6]
   }
 ];
 
@@ -913,7 +1021,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// ../.wrangler/tmp/bundle-k9SEnY/middleware-insertion-facade.js
+// ../.wrangler/tmp/bundle-MfH7IF/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -945,7 +1053,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// ../.wrangler/tmp/bundle-k9SEnY/middleware-loader.entry.ts
+// ../.wrangler/tmp/bundle-MfH7IF/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;
