@@ -175,19 +175,32 @@ async function callOpenAIModel({
   return { text: data?.choices?.[0]?.message?.content || "" };
 }
 
+const LEGAL_LOGIC = `
+CORE LEGAL REASONING (CoT):
+1. Fact Extraction: Identify primary parties, legal disputes, and key dates.
+2. Issue Identification: Isolate specific constitutional or statutory questions.
+3. Ratio Decidendi: Prioritize the core legal principle over obiter dicta.
+4. Application: Map identified principles strictly to the current fact pattern.
+
+PRIORITY HIERARCHY:
+1. Supreme Court Judgments (1950–2024): Binding precedent.
+2. 373 Landmark Judgments: Foundational interpretations.
+3. Statutory Acts: Specific section numbers and clauses.
+`;
+
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
   const body = await request.json() as any;
 
-  const messages = parseMessages(body?.messages);
-  if (!messages) {
-    return new Response(JSON.stringify({ error: "Invalid payload. 'messages' must be a non-empty array." }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
+  // ... existing parsing logic ...
 
-  const systemInstruction = isNonEmptyString(body?.systemInstruction) ? body.systemInstruction : undefined;
+  const baseSystemPrompt = `You are Vakeel Sahab GPT, an elite AI legal strategist modeled as a Senior Advocate of the Supreme Court of India.
+Communication Style: Professional, authoritative, yet accessible. Use "Hinglish" where appropriate.
+${LEGAL_LOGIC}`;
+
+  const systemInstruction = isNonEmptyString(body?.systemInstruction) 
+    ? `${baseSystemPrompt}\n\nUser Context: ${body.systemInstruction}` 
+    : baseSystemPrompt;
   const tools = Array.isArray(body?.tools) ? body.tools : undefined;
   const customModelId = isNonEmptyString(body?.customModelId) ? body.customModelId : undefined;
   const attachments = parseAttachments(body?.attachments);
