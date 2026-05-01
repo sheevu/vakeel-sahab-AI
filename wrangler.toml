@@ -1,8 +1,8 @@
-name = "vakeelsahab"
 # Wrangler configuration for Vakeel Sahab GPT
+name = "vakeel-sahab-ai"
 compatibility_date = "2026-05-01"
-[assets]
-directory = "dist"
+compatibility_flags = [ "nodejs_compat" ]
+pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "vakeel_db"

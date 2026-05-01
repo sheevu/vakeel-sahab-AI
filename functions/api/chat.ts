@@ -93,11 +93,11 @@ async function callGeminiModel({
   }
 
   const model = customModelId || "gemini-1.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const body = {
     contents: [...history, { role: "user", parts: lastMessageParts }],
-    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+    system_instruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
     generationConfig: {
       temperature: 0.5,
       topP: 0.65,
@@ -106,7 +106,7 @@ async function callGeminiModel({
       ...(tools ? [{ functionDeclarations: tools }] : []),
       { googleSearch: {} },
     ],
-    toolConfig: tools ? { functionCallingConfig: { mode: "AUTO" } } : undefined,
+    tool_config: tools ? { function_calling_config: { mode: "AUTO" } } : undefined,
   };
 
   const response = await fetch(url, {
