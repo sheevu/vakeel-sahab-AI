@@ -1,3 +1,4 @@
+name = "vakeelsahab"
 # Wrangler configuration for Vakeel Sahab GPT
 compatibility_date = "2026-05-01"
 pages_build_output_dir = "dist"
