@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, lazy, Suspense, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Send, 
@@ -26,7 +26,7 @@ import {
   X,
   MicOff,
   ChevronLeft,
-  CheckCircle2
+  ChevronRight
 } from "lucide-react";
 import Orb from "./Orb";
 import Sidebar from "./Sidebar";
@@ -36,7 +36,6 @@ import { useAudioRecorder } from "../lib/useAudioRecorder";
 import { useIsMobile } from "../lib/useIsMobile";
 
 const SettingsOverlay = lazy(() => import("./SettingsOverlay"));
-const TrainingPortal = lazy(() => import("./TrainingPortal"));
 
 const SYSTEM_PROMPT = `Purpose and Goals:
 Act as a legendary Senior Advocate of the Supreme Court of India, providing high-level legal strategy and documentation support.
@@ -44,39 +43,47 @@ Assist the user in navigating complex matrimonial and criminal litigation, speci
 Ensure the user's constitutional rights are protected through expert guidance on immediate relief measures and evidence management.
 
 Behaviors and Rules:
-- Communication Style: Speak in a short, punchy, and professional style. 
-- Greeting & Intake: ALWAYS ask for the user's name in your very first response if you don't know it. Proceed only after they provide it.
-- Formatting: Do NOT use markdown artifacts like '**' or '###'. Use bold text via unicode or clean markdown that the UI renders properly as bold. Use emojis frequently to keep the tone approachable yet authoritative.
-- Keep responses conversational and avoid overly long or lengthy explanations. ⚖️
-- Maintain proficiency in both English and Hindi (Hinglish).
+Communication Style and Greeting:
+Start every response with 'Namastey, I am Vakeel Sahab GPT. How can I help you Today?'.
+Keep responses conversational and avoid overly long or lengthy explanations.
+Maintain proficiency in both English and Hindi (Hinglish), adapting to the user's language preference.
 
 Legal Strategy and Relief:
-- Prioritize immediate relief: provide steps for anticipatory bail, stay on arrest, and FIR quashing. 🛡️
-- Offer guidance on drafting robust legal documents including replies, affidavits, and writ petitions. 📝
-- Cross-reference the Bharatiya Nyaya Sanhita (BNS) 2023 with old IPC sections to ensure accurate criminal defense advice.
+Prioritize immediate relief: provide steps for anticipatory bail, stay on arrest, and FIR quashing.
+Offer guidance on drafting robust legal documents including replies, affidavits, and writ petitions.
+Cross-reference the Bharatiya Nyaya Sanhita (BNS) 2023 with old IPC sections to ensure accurate criminal defense advice.
 
 Evidence and Counter-Litigation:
-- Guide the user in documenting harassment and collecting evidence of innocence. 📸
-- Advise on potential counter-litigation strategies such as defamation or mental cruelty charges.
-- Use multi-modal capabilities: analyze images of evidence and interpret legal paperwork.
+Guide the user in documenting harassment and collecting evidence of innocence.
+Advise on potential counter-litigation strategies such as defamation or mental cruelty charges where applicable.
+You are equipped with multi-modal capabilities: you can analyze images of evidence, transcribing documents, and interpret legal paperwork uploaded by the user to provide more precise strategy.
 
 Research and Verification:
-- For every legal or procedural query, perform a web search to verify the latest laws and Supreme Court judgments. 🔍
-- Cite authoritative source links to allow for independent verification.
+For every legal or procedural query, perform a web search to verify the latest laws, Supreme Court judgments, and government notifications.
+Always cite authoritative source links (official court or government websites) to allow for independent verification.
+
+Dispute Resolution:
+Suggest mediation and negotiation as alternatives to litigation when it serves the user's best interest to resolve the matter early.
+
+Overall Tone:
+Empathy combined with courtroom authority.
+Professional, proactive, and focused on maintaining the user's dignity.
+Practical and solution-oriented.
 
 1. 🔷 AGENT PERSONA
-You are “Vakeel GPT”, an elite AI legal strategist modeled as a Senior Advocate of the Supreme Court of India. 🏛️
+You are “Vakeel GPT”, an elite AI legal strategist modeled as a Senior Advocate of the Supreme Court of India with 40+ years of simulated courtroom experience.
+Expertise across: Criminal Law (BNS 2023 / IPC 1860 / BNSS 2023), Civil & Commercial Law, Family Law, Constitutional Law, Corporate & Financial Law.
 
 2. 🌐 OUTPUT LANGUAGE RULE
-Respond in: Hinglish (default). Tone: Sharp, professional, assertive.
+YOU MUST RESPOND UNMISTAKABLY IN: Hinglish (default). Switch ONLY if user explicitly asks. Tone: Clear, sharp, professional, slightly assertive.
 
 3. ⚖️ LEGAL RESPONSE FRAMEWORK (MANDATORY STRUCTURE)
-Every answer MUST follow this internal structure (kept very concise):
-1. Situation Analysis: Quick breakdown.
-2. Legal Position: Relevant law/sections.
-3. Risk Assessment: Key dangers.
+Every answer MUST follow this internal structure:
+1. Situation Analysis: Logical breakdown of facts.
+2. Legal Position: Relevant law / sections / principles.
+3. Risk Assessment: Dangers (arrest, liability, penalty etc.).
 4. Immediate Action: Next 24–72 hour steps.
-5. Strategic Advice: Long-term view.
+5. Strategic Advice: Long-term positioning.
 
 4. 🛠️ TOOL RULES
 - get_client_profile(name, location, case_type, case_stage)
@@ -85,12 +92,12 @@ Every answer MUST follow this internal structure (kept very concise):
 - case_strategy_builder(facts, case_type)
 
 5. 🚀 STARTING MESSAGE
-“Namastey! 🙏 I am Vakeel Sahab GPT. Before we proceed with your legal consultation, may I know your name, please? ✍️”
+“Namastey, I am Vakeel Sahab GPT. How can I help you Today?”
 `;
 
 const INITIAL_MESSAGE: Message = {
   role: "assistant",
-  content: "Namastey! 🙏 I am Vakeel Sahab GPT. Before we proceed with your legal consultation, may I know your name, please? ✍️"
+  content: "Namastey, I am Vakeel Sahab GPT. How can I help you Today?"
 };
 
 interface Chat {
@@ -104,17 +111,10 @@ interface Chat {
 
 export default function ChatInterface() {
   const isMobile = useIsMobile();
-  const shouldAnimateBackground = !isMobile;
-  const storageScope = useMemo(() => {
-    const existing = localStorage.getItem("vakeel_storage_scope");
-    if (existing) return existing;
-    const generated = `anon_${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem("vakeel_storage_scope", generated);
-    return generated;
-  }, []);
+  const userEmail = "sheevum.goel@gmail.com"; // From metadata, for scoping
   
   const [chats, setChats] = useState<Chat[]>(() => {
-    const saved = localStorage.getItem(`vakeel_chats_${storageScope}`);
+    const saved = localStorage.getItem(`vakeel_chats_${userEmail}`);
     if (saved) return JSON.parse(saved);
     
     // Initial mock data as requested: "BNS Section 420 Query", "Drafting Notice for Rent"
@@ -181,14 +181,11 @@ export default function ChatInterface() {
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [orbStatus, setOrbStatus] = useState<"idle" | "speaking" | "thinking">("idle");
-  const [provider, setProvider] = useState<Provider>("openai");
-  const [customModelId, setCustomModelId] = useState("");
   const [clientProfile, setClientProfile] = useState<any>(() => {
-    const saved = localStorage.getItem(`vakeel_profile_${storageScope}`);
+    const saved = localStorage.getItem(`vakeel_profile_${userEmail}`);
     return saved ? JSON.parse(saved) : null;
   });
   const [showSettings, setShowSettings] = useState(false);
-  const [showTraining, setShowTraining] = useState(false);
   const [isPlayingId, setIsPlayingId] = useState<number | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
@@ -204,15 +201,23 @@ export default function ChatInterface() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [documentType, setDocumentType] = useState("general");
-  const [caseDossier, setCaseDossier] = useState<string>(() => localStorage.getItem(`vakeel_case_dossier_${storageScope}`) || "");
-  const [caseFileNames, setCaseFileNames] = useState<string[]>(() => {
-    const saved = localStorage.getItem(`vakeel_case_files_${storageScope}`);
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [isAnalyzingCaseFiles, setIsAnalyzingCaseFiles] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<{value: string, label: string, prompt: string} | null>(null);
+  const [audioVolume, setAudioVolume] = useState(1);
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
   const recognitionRef = useRef<any>(null);
-  const dictationBaseInputRef = useRef("");
-  const committedTranscriptRef = useRef("");
+
+  const LEGAL_TEMPLATES = [
+    { value: 'fir', label: 'FIR', prompt: 'Draft an FIR for: [Insert Facts]' },
+    { value: 'affidavit', label: 'Affidavit', prompt: 'Draft an Affidavit for: [Insert Facts]' },
+    { value: 'notice', label: 'Legal Notice', prompt: 'Draft a Legal Notice for: [Insert Facts]' },
+  ];
+
+  const handleTemplateSelect = (template: typeof LEGAL_TEMPLATES[0]) => {
+      setSelectedTemplate(template);
+      setInput(template.prompt);
+  };
+
 
   const filteredMessages = useMemo(() => {
     if (!searchQuery.trim()) return messages;
@@ -231,24 +236,21 @@ export default function ChatInterface() {
       recognition.lang = 'en-IN'; // Default to Hinglish-friendly English
 
       recognition.onresult = (event: any) => {
-        let allFinalTranscript = "";
-        let interimTranscript = "";
-        for (let i = 0; i < event.results.length; ++i) {
-          const segment = event.results[i][0]?.transcript || "";
+        let interimTranscript = '';
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
-            allFinalTranscript += segment;
+            finalTranscript += event.results[i][0].transcript;
           } else {
-            interimTranscript += segment;
+            interimTranscript += event.results[i][0].transcript;
           }
         }
-
-        committedTranscriptRef.current = allFinalTranscript;
-        const combinedTranscript = `${allFinalTranscript} ${interimTranscript}`.trim();
-        const nextInput = `${dictationBaseInputRef.current} ${combinedTranscript}`.trim();
-        setInput(nextInput);
+        
+        // Update input with the dictation
+        setInput(prev => prev + finalTranscript + interimTranscript);
         
         // Check for commands
-        const text = combinedTranscript.toLowerCase();
+        const text = (finalTranscript + interimTranscript).toLowerCase();
         if (text.includes("send message") || text.includes("send this")) {
           handleSend();
           stopLiveDictation();
@@ -263,6 +265,9 @@ export default function ChatInterface() {
         } else if (text.includes("clear chat") || text.includes("clear history")) {
           setMessages([INITIAL_MESSAGE]);
           stopLiveDictation();
+        } else if (text.includes("upload file") || text.includes("attach document")) {
+            fileInputRef.current?.click();
+            stopLiveDictation();
         } else if (text.includes("switch to") || text.includes("set document type to")) {
           const typeMatch = text.match(/(?:switch to|set document type to)\s+(.+)/);
           if (typeMatch && typeMatch[1]) {
@@ -279,8 +284,6 @@ export default function ChatInterface() {
 
   const startLiveDictation = () => {
     if (recognitionRef.current) {
-      dictationBaseInputRef.current = input.trim();
-      committedTranscriptRef.current = "";
       recognitionRef.current.start();
       setIsLiveDictating(true);
     }
@@ -294,10 +297,8 @@ export default function ChatInterface() {
   };
   
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputBarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [inputBarHeight, setInputBarHeight] = useState(180);
 
   // ... (useAudioRecorder call unchanged)
 
@@ -324,41 +325,10 @@ export default function ChatInterface() {
         if (processedCount === files.length && autoSend) {
           triggerAutoAnalysis(processedFiles);
         }
-        if (processedCount === files.length) {
-          updateCaseDossierFromFiles(processedFiles);
-        }
       };
       reader.readAsDataURL(file);
     });
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const updateCaseDossierFromFiles = async (files: { name: string, type: string, data: string }[]) => {
-    if (files.length === 0) return;
-    setIsAnalyzingCaseFiles(true);
-    setCaseFileNames(prev => Array.from(new Set([...prev, ...files.map(f => f.name)])));
-
-    try {
-      const dossierPrompt: Message[] = [{
-        role: "user",
-        content: "Analyze these uploaded FIR/complaint/case files. Create a concise CASE DOSSIER with: parties, allegations, timeline, key evidence, legal risk points, immediate next legal steps, and unknowns needing clarification. Keep it structured and factual."
-      }];
-
-      const dossierResponse = await getAICompletion(dossierPrompt, {
-        provider: "gemini",
-        customModelId: "",
-        systemInstruction: "You are a legal document analyzer. Extract relevant case facts only.",
-        attachments: files,
-      });
-
-      if (dossierResponse.text?.trim()) {
-        setCaseDossier(dossierResponse.text.trim());
-      }
-    } catch (error) {
-      console.error("Case dossier generation failed:", error);
-    } finally {
-      setIsAnalyzingCaseFiles(false);
-    }
   };
 
   const triggerAutoAnalysis = async (files: { name: string, type: string, data: string }[]) => {
@@ -376,20 +346,12 @@ export default function ChatInterface() {
 
   // Cache profile and chats
   useEffect(() => {
-    localStorage.setItem(`vakeel_profile_${storageScope}`, JSON.stringify(clientProfile));
-  }, [clientProfile, storageScope]);
+    localStorage.setItem(`vakeel_profile_${userEmail}`, JSON.stringify(clientProfile));
+  }, [clientProfile, userEmail]);
 
   useEffect(() => {
-    localStorage.setItem(`vakeel_chats_${storageScope}`, JSON.stringify(chats));
-  }, [chats, storageScope]);
-
-  useEffect(() => {
-    localStorage.setItem(`vakeel_case_dossier_${storageScope}`, caseDossier);
-  }, [caseDossier, storageScope]);
-
-  useEffect(() => {
-    localStorage.setItem(`vakeel_case_files_${storageScope}`, JSON.stringify(caseFileNames));
-  }, [caseFileNames, storageScope]);
+    localStorage.setItem(`vakeel_chats_${userEmail}`, JSON.stringify(chats));
+  }, [chats, userEmail]);
 
   useEffect(() => {
     const handleToggleSidebar = () => setIsSidebarOpen(prev => !prev);
@@ -438,28 +400,43 @@ export default function ChatInterface() {
     }
   }, [audioBlob]);
 
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleTimeUpdate = () => setAudioCurrentTime(audio.currentTime);
+    const handleLoadedMetadata = () => setAudioDuration(audio.duration);
+    const handleVolumeChange = () => setAudioVolume(audio.volume);
+
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('volumechange', handleVolumeChange);
+
+    return () => {
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('volumechange', handleVolumeChange);
+    };
+  }, [audioRef.current, isPlayingId]);
+
+  const formatTime = (time: number) => {
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
   const handleTranscription = async (blob: Blob) => {
     setIsTranscribing(true);
     setOrbStatus("thinking");
     try {
-      const base64data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(blob);
-        reader.onerror = () => reject(new Error("Unable to read recorded audio."));
-        reader.onloadend = () => {
-          const result = reader.result as string;
-          const encoded = result?.split(",")[1];
-          if (!encoded) {
-            reject(new Error("Audio encoding failed."));
-            return;
-          }
-          resolve(encoded);
-        };
-      });
-
-      const text = await transcribeAudio(base64data, blob.type);
-      setInput(prev => (prev ? `${prev} ${text}` : text));
-      clearAudio();
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = async () => {
+        const base64data = (reader.result as string).split(",")[1];
+        const text = await transcribeAudio(base64data, blob.type);
+        setInput(prev => (prev ? `${prev} ${text}` : text));
+        clearAudio();
+      };
     } catch (error) {
       console.error(error);
     } finally {
@@ -495,7 +472,7 @@ export default function ChatInterface() {
 
     try {
       const audioData = await getSpeech(text);
-      if (audioData) {
+      if (audioData && isPlayingId === index) {
         const audioUrl = `data:audio/mp3;base64,${audioData}`;
         if (audioRef.current) {
           audioRef.current.src = audioUrl;
@@ -528,28 +505,10 @@ export default function ChatInterface() {
   };
 
   useEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
-    const distanceFromBottom = container.scrollHeight - (container.scrollTop + container.clientHeight);
-    if (distanceFromBottom < 180) {
-      container.scrollTop = container.scrollHeight;
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, isTyping, isTranscribing, uploadedFiles.length]);
-
-  useEffect(() => {
-    const node = inputBarRef.current;
-    if (!node) return;
-    const updateHeight = () => setInputBarHeight(node.offsetHeight + 24);
-    updateHeight();
-
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(node);
-    window.addEventListener("resize", updateHeight);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", updateHeight);
-    };
-  }, []);
+  }, [messages, isTyping]);
 
   const handleSend = async (overrideInput?: string, overrideFiles?: { name: string, type: string, data: string }[]) => {
     // If called as an event handler (i.e. first argument is an event)
@@ -591,13 +550,11 @@ export default function ChatInterface() {
     setOrbStatus("thinking");
 
     try {
-      const profileString = clientProfile ? `\n\nADVOCATE PROFILE:\nName: ${clientProfile.name || 'N/A'}\nSpecialization: ${clientProfile.specialization || 'N/A'}` : '';
-      const caseContextString = caseDossier ? `\n\nACTIVE CASE DOSSIER:\n${caseDossier}` : "";
-      const combinedPrompt = `${SYSTEM_PROMPT}${profileString}${caseContextString}\n\nCURRENT DRAFTING TYPE: ${documentType}\n\nCUSTOM USER DIRECTIVES:\n${customInstructions.join("\n")}`;
+      const profileString = clientProfile ? `\n\nADVOCATE / CASE PROFILE:\nName: ${clientProfile.name || 'N/A'}\nSpecialization: ${clientProfile.specialization || 'N/A'}\nOpposing Counsel: ${clientProfile.opposingCounsel || 'N/A'}\nCourt Jurisdiction: ${clientProfile.courtJurisdiction || 'N/A'}\nCase History: ${clientProfile.previousCaseHistory || 'N/A'}` : '';
+      const combinedPrompt = `${SYSTEM_PROMPT}${profileString}\n\nCURRENT DRAFTING TYPE: ${documentType}\n\nCUSTOM USER DIRECTIVES:\n${customInstructions.join("\n")}`;
       
       const response = await getAICompletion([...messages, userMessage], {
-        provider,
-        customModelId,
+        provider: 'gemini',
         systemInstruction: combinedPrompt,
         attachments: filesToSend,
         tools: [
@@ -655,28 +612,26 @@ export default function ChatInterface() {
       });
 
       setOrbStatus("speaking");
-      setMessages(prev => [...prev, { 
-        role: "assistant", 
-        content: response.text,
-        isCached: (response as any).isCached 
-      }]);
+      setMessages(prev => [...prev, { role: "assistant", content: response.text }]);
       
       // Handle tool calls visually
-      if (response.toolCalls?.length) {
-        const toolMessages: Record<string, string> = {
-          get_client_profile: "Analyzing Case Profile & Jurisdiction...",
-          search_law: "Fetching Relevant Legal Statutes & BNS Sections...",
-          draft_legal_document: "Drafting Specialized Legal Documentation...",
-          case_strategy_builder: "Synthesizing Offensive & Defensive Strategy..."
-        };
+      if (response.toolCalls) {
+        for (const tool of response.toolCalls) {
+          const toolMessages: Record<string, string> = {
+            get_client_profile: "Analyzing Case Profile & Jurisdiction...",
+            search_law: "Fetching Relevant Legal Statutes & BNS Sections...",
+            draft_legal_document: "Drafting Specialized Legal Documentation...",
+            case_strategy_builder: "Synthesizing Offensive & Defensive Strategy..."
+          };
+          
+          const statusMessage = toolMessages[tool.name] || `Executing Tactical ${tool.name} Engine...`;
 
-        const toolStatusMessages = response.toolCalls.map((tool) => ({
-          role: "assistant" as const,
-          content: toolMessages[tool.name] || `Executing Tactical ${tool.name} Engine...`,
-          isTool: true
-        }));
-
-        setMessages(prev => [...prev, ...toolStatusMessages as any]);
+          setMessages(prev => [...prev, { 
+            role: "assistant", 
+            content: statusMessage,
+            isTool: true 
+          }]);
+        }
       }
 
     } catch (error) {
@@ -687,11 +642,6 @@ export default function ChatInterface() {
       setOrbStatus("idle");
     }
   };
-
-  const submitQuickAction = useCallback((message: string) => {
-    setInput(message);
-    handleSend(message);
-  }, [handleSend]);
 
   const handleDownloadDoc = (content: string) => {
     const blob = new Blob([content], { type: "text/plain" });
@@ -746,23 +696,23 @@ export default function ChatInterface() {
         {/* High-Contrast Multi-Layer Mesh Background */}
         <div className="fixed inset-0 overflow-hidden pointer-events-none bg-[#050505]">
           <motion.div 
-            animate={shouldAnimateBackground ? {
+            animate={{
               scale: [1, 1.2, 1],
               rotate: [0, 90, 0],
               x: [-50, 50, -50],
               y: [-20, 40, -20],
-            } : undefined}
-            transition={shouldAnimateBackground ? { duration: 25, repeat: Infinity, ease: "easeInOut" } : undefined}
+            }}
+            transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
             className="absolute -top-[10%] -left-[10%] w-[80%] h-[80%] bg-[radial-gradient(circle_at_center,_rgba(249,115,22,0.3)_0%,_transparent_70%)] blur-[100px]" 
           />
           <motion.div 
-            animate={shouldAnimateBackground ? {
+            animate={{
               scale: [1.2, 1, 1.2],
               rotate: [0, -45, 0],
               x: [30, -60, 30],
               y: [50, -20, 50],
-            } : undefined}
-            transition={shouldAnimateBackground ? { duration: 30, repeat: Infinity, ease: "easeInOut" } : undefined}
+            }}
+            transition={{ duration: 30, repeat: Infinity, ease: "easeInOut" }}
             className="absolute -bottom-[20%] -right-[10%] w-[90%] h-[90%] bg-[radial-gradient(circle_at_center,_rgba(220,38,38,0.25)_0%,_transparent_70%)] blur-[120px]" 
           />
           
@@ -811,13 +761,6 @@ export default function ChatInterface() {
             <div className="hidden sm:flex px-3 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/20 text-[10px] uppercase tracking-widest text-orange-400 font-black shadow-inner">
               Supreme Court Edition
             </div>
-            <button 
-              onClick={() => setShowTraining(true)}
-              className="p-2.5 hover:bg-orange-500/10 rounded-2xl transition-colors text-orange-500 hover:text-orange-400 border border-transparent hover:border-orange-500/20"
-              title="Train AI Brain"
-            >
-                <Database className="w-5 h-5" />
-            </button>
             <button 
               onClick={() => setShowSettings(true)}
               className="p-2.5 hover:bg-white/5 rounded-2xl transition-colors text-gray-500 hover:text-white border border-transparent hover:border-white/10"
@@ -900,15 +843,14 @@ export default function ChatInterface() {
           <div 
             ref={scrollRef}
             className={cn(
-              "flex-1 w-full max-w-3xl overflow-y-auto px-4 py-8 space-y-6 scroll-smooth z-0 transition-all duration-500",
-              messages.length < 3 ? "opacity-0 invisible" : "opacity-100 visible"
+              "flex-1 w-full max-w-3xl overflow-y-auto px-4 py-8 space-y-6 scroll-smooth z-0 transition-opacity duration-500",
+              messages.length < 2 ? "opacity-0" : "opacity-100"
             )}
-            style={{ paddingBottom: `${Math.max(inputBarHeight, 180)}px` }}
           >
             {messages.map((msg, i) => (
               <motion.div
                 key={i}
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className={cn(
                   "flex gap-4 w-full",
@@ -916,36 +858,30 @@ export default function ChatInterface() {
                   (msg as any).isTool && "justify-center"
                 )}
               >
+                {!msg.role.includes('system') && (
+                  <div className={cn(
+                    "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center",
+                    msg.role === "user" ? "bg-orange-600" : "bg-white/5 border border-white/5"
+                  )}>
+                    {msg.role === "user" ? <User className="w-5 h-5" /> : <Gavel className="w-4 h-4 text-orange-400" />}
+                  </div>
+                )}
+                
                 {(msg as any).isTool ? (
-                  <div className="flex flex-col items-center gap-2 py-4 px-10 bg-orange-600/5 border border-orange-500/20 rounded-[2rem] backdrop-blur-3xl shadow-[0_0_50px_rgba(234,88,12,0.1)]">
-                    <div className="flex items-center gap-3">
-                      <RefreshCw className="w-4 h-4 text-orange-500 animate-spin" />
-                      <span className="text-[10px] uppercase font-black tracking-[0.2em] text-orange-500/80 italic">Legal Engine Processing...</span>
-                    </div>
+                  <div className="flex flex-col items-center gap-2 py-4 px-10 bg-orange-600/5 border border-orange-500/20 rounded-[2rem] backdrop-blur-3xl shadow-2xl">
+                    <RefreshCw className="w-4 h-4 text-orange-500 animate-spin" />
                     <div className="text-xs font-bold text-gray-400">{msg.content}</div>
                   </div>
                 ) : (
-                  <>
-                    <div className={cn(
-                      "w-8 h-8 rounded-lg shrink-0 flex items-center justify-center",
-                      msg.role === "user" ? "bg-orange-600" : "bg-white/5 border border-white/5"
-                    )}>
-                      {msg.role === "user" ? <User className="w-5 h-5" /> : <Gavel className="w-4 h-4 text-orange-400" />}
-                    </div>
-                    <div className={cn(
-                      "max-w-[85%] rounded-3xl p-5 text-sm leading-relaxed whitespace-pre-wrap shadow-2xl relative group",
-                      msg.role === "user" 
-                        ? "bg-orange-600/90 text-white rounded-tr-none" 
-                        : "bg-black/60 backdrop-blur-3xl border border-white/10 rounded-tl-none text-gray-100"
-                    )}>
-                      {(msg as any).isCached && (
-                        <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-green-500/10 border border-green-500/20 rounded-lg w-fit">
-                          <CheckCircle2 className="w-3 h-3 text-green-500" />
-                          <span className="text-[10px] font-black uppercase tracking-widest text-green-400">Database Verified</span>
-                        </div>
-                      )}
-                      {msg.content}
-                      {msg.role === "assistant" && (
+                  <div className={cn(
+                    "max-w-[85%] rounded-3xl p-5 text-sm leading-relaxed whitespace-pre-wrap shadow-2xl relative group",
+                    msg.role === "user" 
+                      ? "bg-orange-600/90 text-white rounded-tr-none" 
+                      : "bg-black/60 backdrop-blur-3xl border border-white/10 rounded-tl-none text-gray-100"
+                  )}>
+                     <div dangerouslySetInnerHTML={{ __html: msg.content.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>').replace(/__(.*?)__/g, '<u>$1</u>').replace(/\*(.*?)\*/g, '<i>$1</i>') }} />
+                     
+                     {msg.role === "assistant" && (
                         <div className={cn(
                           "absolute flex flex-col gap-2 transition-all",
                           isMobile 
@@ -957,251 +893,129 @@ export default function ChatInterface() {
                             className={cn(
                               "p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all",
                               isPlayingId === i && "text-orange-500 scale-110"
-                            )}
-                            title="Speak Advice"
-                          >
+                            )}>
                             <Volume2 className={cn("w-4 h-4", isPlayingId === i && "animate-pulse")} />
                           </button>
-
-                          {isPlayingId === i && (
-                            <button 
-                              onClick={() => {
-                                if (isPaused) {
-                                  audioRef.current?.play();
-                                  setIsPaused(false);
-                                  setOrbStatus("speaking");
-                                } else {
-                                  audioRef.current?.pause();
-                                  setIsPaused(true);
-                                  setOrbStatus("idle");
-                                }
-                              }}
-                              className="p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all text-orange-400"
-                              title={isPaused ? "Resume" : "Pause"}
-                            >
-                              {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-                            </button>
-                          )}
-
-                          <button 
-                            onClick={() => handleDownloadDoc(msg.content)}
-                            className="p-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/10 transition-all text-gray-400 hover:text-orange-500"
-                            title="Download as .doc"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
                         </div>
-                      )}
-                    </div>
-                  </>
+                     )}
+
+                     {msg.role === "assistant" && isPlayingId === i && (
+                        <div className="mt-4 pt-2 border-t border-white/10 flex flex-col gap-2">
+                            <input 
+                                type="range" 
+                                min={0} 
+                                max={audioDuration} 
+                                value={audioCurrentTime} 
+                                onChange={(e) => {
+                                    const time = parseFloat(e.target.value);
+                                    if (audioRef.current) audioRef.current.currentTime = time;
+                                }}
+                                className="w-full h-1 bg-white/20 rounded-full appearance-none accent-orange-500 cursor-pointer"
+                            />
+                            <div className="flex justify-between text-[10px] text-gray-400">
+                                <span>{formatTime(audioCurrentTime)}</span>
+                                <span>{formatTime(audioDuration)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Volume2 className="w-4 h-4 text-gray-500" />
+                                <input 
+                                    type="range"
+                                    min={0}
+                                    max={1}
+                                    step={0.1}
+                                    value={audioVolume}
+                                    onChange={(e) => {
+                                        const vol = parseFloat(e.target.value);
+                                        if (audioRef.current) audioRef.current.volume = vol;
+                                    }}
+                                    className="w-20 h-1 bg-white/20 rounded-full appearance-none accent-orange-500 cursor-pointer"
+                                />
+                            </div>
+                        </div>
+                     )}
+                  </div>
                 )}
               </motion.div>
             ))}
             {isTyping && (
-              <motion.div 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="flex gap-4"
-              >
-                <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center shadow-[0_0_15px_rgba(234,88,12,0.1)]">
-                  <Gavel className="w-4 h-4 text-orange-400 animate-pulse" />
+                <div className="flex gap-4">
+                  <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center">
+                    <Gavel className="w-4 h-4 text-orange-400 animate-pulse" />
+                  </div>
+                  <div className="bg-black/60 backdrop-blur-3xl border border-white/10 rounded-2xl rounded-tl-none px-5 py-4 text-sm text-gray-400 italic">
+                      <i>Vakeel Sahab is thinking...</i>
+                  </div>
                 </div>
-                <div className="bg-white/[0.03] backdrop-blur-3xl border border-white/5 rounded-2xl rounded-tl-none px-5 py-4 flex items-center gap-1.5 shadow-xl">
-                  <motion.span 
-                    animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
-                    transition={{ repeat: Infinity, duration: 1.2 }}
-                    className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
-                  />
-                  <motion.span 
-                    animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
-                    transition={{ repeat: Infinity, duration: 1.2, delay: 0.2 }}
-                    className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
-                  />
-                  <motion.span 
-                    animate={{ scale: [1, 1.5, 1], opacity: [0.3, 1, 0.3] }}
-                    transition={{ repeat: Infinity, duration: 1.2, delay: 0.4 }}
-                    className="w-1.5 h-1.5 bg-orange-500 rounded-full shadow-[0_0_8px_rgba(249,115,22,0.8)]" 
-                  />
-                  <span className="ml-2 text-[10px] uppercase tracking-widest font-black text-orange-500/60 italic">Vakeel thinking...</span>
-                </div>
-              </motion.div>
             )}
-            <div className="h-4 w-full" />
+            <div className="h-40 w-full" />
           </div>
 
           {/* Action Suggestion Grid */}
           <AnimatePresence>
-            {messages.length >= 1 && messages.length < 8 && (
+            {messages.length < 2 && (
               <motion.div 
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0 }}
-                className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 w-full max-w-3xl px-4 mb-4 z-10"
+                exit={{ opacity: 0, height: 0, margin: 0 }}
+                className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full max-w-5xl px-4 pb-6 z-10"
               >
-                <QuickAction icon={ShieldCheck} label="Strategy" sub="Case Plan" onClick={() => submitQuickAction("Mujhe ek case strategy chahiye.")} />
-                <QuickAction icon={Search} label="Law" sub="BNS Sec" onClick={() => submitQuickAction("Muje Section 420 ke baare mein bataiye.")} />
-                <QuickAction icon={FileText} label="Draft" sub="Notices" onClick={() => submitQuickAction("Muje ek Legal Notice draft karni hai.")} />
-                <QuickAction icon={Info} label="Rules" sub="BNS 2023" onClick={() => submitQuickAction("Bharatiya Nyaya Sanhita ke naye rules kya hain?")} />
+                <QuickAction icon={ShieldCheck} label="Case Strategy" sub="Tactical Plan" onClick={() => setInput("Mujhe ek case strategy chahiye.")} />
+                <QuickAction icon={Search} label="Search Act" sub="BNS Sections" onClick={() => setInput("Muje Section 420 ke baare mein bataiye.")} />
+                <QuickAction icon={FileText} label="Draft Doc" sub="Notices" onClick={() => setInput("Muje ek Legal Notice draft karni hai.")} />
+                <QuickAction icon={Info} label="BNS Rules" sub="Laws 2023" onClick={() => setInput("Bharatiya Nyaya Sanhita ke naye rules kya hain?")} />
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Input Bar Section */}
-          <div ref={inputBarRef} className="fixed bottom-0 left-0 w-full z-20 bg-black/80 backdrop-blur-3xl pb-2 md:pb-4">
-            <div className="w-full max-w-3xl mx-auto px-2 md:px-4 py-2">
-            {(caseDossier || isAnalyzingCaseFiles) && (
-              <div className="flex items-center justify-between gap-2 mb-2 bg-orange-600/10 border border-orange-500/30 rounded-xl px-3 py-1.5">
-                <div className="flex items-center gap-2 min-w-0">
-                  {isAnalyzingCaseFiles ? (
-                    <Loader2 className="w-3 h-3 text-orange-400 animate-spin shrink-0" />
-                  ) : (
-                    <FileText className="w-3 h-3 text-orange-400 shrink-0" />
-                  )}
-                  <span className="text-[9px] md:text-[10px] text-orange-300 font-black uppercase tracking-widest truncate">
-                    {isAnalyzingCaseFiles ? "Analyzing..." : `Context Active (${caseFileNames.length})`}
-                  </span>
-                </div>
-                {caseDossier && !isAnalyzingCaseFiles && (
-                  <button
-                    onClick={() => {
-                      setCaseDossier("");
-                      setCaseFileNames([]);
-                    }}
-                    className="text-[9px] uppercase tracking-widest font-black text-gray-300 hover:text-white shrink-0"
-                  >
-                    Clear
-                  </button>
+          {/* Sticky Input Bar */}
+          <div className="fixed bottom-0 left-0 w-full z-20 bg-gradient-to-t from-black via-black/90 to-transparent pb-6 pt-10">
+            <div className="w-full max-w-3xl mx-auto px-4">
+              
+              {/* File Previews */}
+              <AnimatePresence>
+                {uploadedFiles.length > 0 && (
+                    <motion.div className="flex gap-2 mb-3 overflow-x-auto pb-2">
+                        {uploadedFiles.map((file, i) => (
+                            <div key={i} className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 flex items-center gap-2">
+                                <span className="text-[10px] text-gray-300 truncate max-w-[80px]">{file.name}</span>
+                                <button onClick={() => removeFile(i)} className="text-gray-500 hover:text-red-500"><X className="w-3 h-3"/></button>
+                            </div>
+                        ))}
+                    </motion.div>
                 )}
-              </div>
-            )}
-            {/* File Previews & Transcribing State */}
-            <AnimatePresence>
-              {(uploadedFiles.length > 0 || isTranscribing) && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 10 }}
-                  className="flex flex-col gap-2 mb-2 bg-black/60 backdrop-blur-3xl p-2 md:p-3 rounded-2xl border border-white/10 shadow-2xl"
-                >
-                  <div className="flex flex-wrap gap-1.5 max-h-24 md:max-h-32 overflow-y-auto">
-                    {uploadedFiles.map((file, idx) => (
-                      <div key={idx} className="flex items-center gap-2 bg-white/5 px-2 py-1 rounded-xl border border-white/10">
-                        {file.type.startsWith("image/") ? (
-                          <div className="w-4 h-4 md:w-5 md:h-5 rounded overflow-hidden bg-black shrink-0">
-                            <img src={`data:${file.type};base64,${file.data}`} alt="preview" className="w-full h-full object-cover" />
-                          </div>
-                        ) : (
-                          <FileText className="w-3 h-3 text-orange-400" />
-                        )}
-                        <span className="text-[9px] font-bold text-gray-300 truncate max-w-[80px] md:max-w-[100px]">{file.name}</span>
-                        {!isTranscribing && (
-                          <button onClick={() => removeFile(idx)} className="text-gray-500 hover:text-red-500 transition-colors">
-                            <X className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  {(isTranscribing || (isTyping && messages[messages.length-1]?.role === 'user')) && uploadedFiles.length > 0 && (
-                    <div className="flex items-center gap-2 px-1 border-t border-white/5 pt-1.5 mt-1">
-                      <Loader2 className="w-3 h-3 text-orange-500 animate-spin" />
-                      <span className="text-[8px] md:text-[9px] font-black uppercase tracking-widest text-orange-500/80 italic">
-                        Processing Evidence...
-                      </span>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
+              </AnimatePresence>
 
-            <div className="relative flex items-center gap-1.5 md:gap-2">
-               <input 
-                 type="file" 
-                 ref={fileInputRef} 
-                 onChange={(e) => handleFileSelect(e, false)} 
-                 className="hidden" 
-                 multiple
-                 accept="image/*,application/pdf,text/plain"
-               />
-               
-               <button 
-                  onClick={() => {
-                    const el = fileInputRef.current;
-                    if (el) {
-                      const newHandler = (e: any) => {
-                        handleFileSelect(e, true);
-                        el.removeEventListener('change', newHandler);
-                      };
-                      el.addEventListener('change', newHandler);
-                      el.click();
-                    }
-                  }}
-                  className="p-3.5 md:p-4 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-500/30 rounded-full transition-all text-orange-500 shadow-lg active:scale-95 shrink-0"
-                  title="Upload & Analyze"
-                >
-                  <Plus className="w-5 h-5 md:w-5 md:h-5" />
+              <div className="relative flex items-center gap-2 bg-[#1A1A1A] rounded-3xl p-2 border border-white/10 shadow-2xl shadow-black">
+                <input type="file" ref={fileInputRef} onChange={(e) => handleFileSelect(e, false)} className="hidden" multiple accept="image/*,application/pdf" />
+                <button onClick={() => fileInputRef.current?.click()} className="p-3.5 hover:bg-white/10 rounded-2xl text-orange-500">
+                    <Plus className="w-5 h-5" />
                 </button>
-
-               <div className="flex-1 relative group">
-                  <input 
-                    type="text"
+                <div className="relative group/templates">
+                    <button className="p-3.5 hover:bg-white/10 rounded-2xl text-gray-400">
+                        <FileText className="w-5 h-5" />
+                    </button>
+                    <div className="absolute bottom-full left-0 mb-2 w-48 bg-[#1A1A1A] border border-white/10 rounded-2xl shadow-xl p-2 hidden group-hover/templates:block">
+                        {LEGAL_TEMPLATES.map(t => (
+                            <button key={t.value} onClick={() => handleTemplateSelect(t)} className="w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-white/10 rounded-xl">
+                                {t.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <input 
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-                        e.preventDefault();
-                        handleSend();
-                      }
-                    }}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSend()}
                     placeholder="Ask Vakeel Sahab..."
-                    className="w-full bg-white/5 border border-white/10 backdrop-blur-3xl rounded-[2rem] px-5 md:px-8 py-4 md:py-5 pr-24 md:pr-28 text-sm md:text-sm focus:outline-none focus:bg-white/10 transition-all text-gray-200 placeholder:text-gray-600 shadow-2xl"
-                  />
-                  <div className="absolute right-1.5 md:right-2 top-1.5 md:top-2 flex gap-1">
-                    <button 
-                      onClick={isLiveDictating ? stopLiveDictation : startLiveDictation}
-                      className={cn(
-                        "p-2.5 md:p-3 rounded-2xl transition-all shadow-xl",
-                        isLiveDictating ? "bg-red-600 hover:bg-red-700 animate-pulse" : "bg-white/5 hover:bg-white/10 text-gray-400"
-                      )}
-                      title={isLiveDictating ? "Stop Dictation" : "Start Live Dictation"}
-                    >
-                      <Mic className={cn("w-4 h-4 md:w-4 md:h-4", isLiveDictating ? "text-white" : "")} />
-                    </button>
-                    <button 
-                      onClick={() => handleSend()}
-                      disabled={!input.trim() || isTyping}
-                      className="p-2.5 md:p-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 rounded-2xl transition-all shadow-xl"
-                    >
-                      <Send className="w-4 h-4 md:w-4 md:h-4 text-white" />
-                    </button>
-                  </div>
-               </div>
-
-               <button 
-                 onClick={isRecording ? stopRecording : startRecording}
-                 className={cn(
-                   "p-3.5 md:p-4 border rounded-full transition-all active:scale-95 shadow-2xl shrink-0",
-                   isRecording 
-                    ? "bg-red-500/20 border-red-500 text-red-500 animate-pulse" 
-                    : "bg-white/5 border-white/5 text-gray-500 hover:text-orange-500"
-                 )}
-               >
-                  {isRecording ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-               </button>
-            </div>
-            {isTranscribing && (
-              <div className="flex justify-center mt-1.5">
-                <span className="text-[8px] md:text-[9px] text-orange-500/60 uppercase font-black tracking-widest animate-pulse italic">Transcribing...</span>
+                    className="flex-1 bg-transparent border-none text-sm placeholder:text-gray-600 focus:outline-none py-2"
+                />
+                <button onClick={isRecording ? stopRecording : startRecording} className={cn("p-3 rounded-2xl", isRecording ? "bg-red-600/20 text-red-500 animate-pulse" : "hover:bg-white/10 text-gray-500")}>
+                    <Mic className="w-5 h-5" />
+                </button>
+                <button onClick={() => handleSend()} className="p-3.5 bg-orange-600 hover:bg-orange-700 rounded-2xl text-white">
+                    <Send className="w-4 h-4" />
+                </button>
               </div>
-            )}
-            {recordingError && (
-              <div className="flex justify-center mt-1.5 px-4">
-                <span className="text-[8px] md:text-[9px] text-red-500 uppercase font-black tracking-widest italic flex items-center gap-2 text-center">
-                  <MicOff className="w-3 h-3" />
-                  Error: {recordingError}
-                </span>
-              </div>
-            )}
             </div>
           </div>
         </main>
@@ -1213,21 +1027,9 @@ export default function ChatInterface() {
           <Suspense fallback={null}>
             <SettingsOverlay 
               onClose={() => setShowSettings(false)}
-              provider={provider}
-              setProvider={setProvider}
               clientProfile={clientProfile}
               setClientProfile={setClientProfile}
-              customModelId={customModelId}
-              setCustomModelId={setCustomModelId}
             />
-          </Suspense>
-        )}
-      </AnimatePresence>
-      {/* Training Portal Overlay */}
-      <AnimatePresence>
-        {showTraining && (
-          <Suspense fallback={null}>
-            <TrainingPortal onClose={() => setShowTraining(false)} />
           </Suspense>
         )}
       </AnimatePresence>
@@ -1239,14 +1041,13 @@ function QuickAction({ icon: Icon, label, sub, onClick }: { icon: any, label: st
   return (
     <button 
        onClick={onClick}
-       className="flex flex-col items-start gap-1 p-3 md:p-5 bg-white/5 border border-white/5 rounded-2xl md:rounded-3xl hover:bg-white/[0.08] hover:border-white/10 transition-all text-left shadow-2xl"
+       className="flex flex-col items-center justify-center gap-2 p-4 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.05] rounded-3xl transition-all text-center backdrop-blur-sm shadow-xl hover:scale-105 active:scale-95"
     >
-      <div className="p-2 md:p-3 bg-orange-500/10 rounded-xl md:rounded-2xl mb-1">
-        <Icon className="w-4 h-4 md:w-5 md:h-5 text-orange-500" />
+      <div className="p-3 bg-orange-500/10 rounded-2xl">
+        <Icon className="w-5 h-5 text-orange-500" />
       </div>
-      <div className="text-[10px] md:text-sm font-black text-gray-100 leading-tight uppercase tracking-tighter truncate w-full">{label}</div>
-      <div className="text-[8px] md:text-[10px] text-gray-500 uppercase tracking-widest font-bold truncate w-full">{sub}</div>
+      <div className="text-sm font-black text-gray-100 leading-tight uppercase tracking-tighter">{label}</div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">{sub}</div>
     </button>
   );
 }
-

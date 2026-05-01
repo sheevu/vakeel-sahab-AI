@@ -1,34 +1,23 @@
 import React from "react";
 import { motion } from "motion/react";
+import { cn } from "../lib/utils";
 
 interface SettingsOverlayProps {
   onClose: () => void;
-  provider: "gemini" | "openai";
-  setProvider: (p: "gemini" | "openai") => void;
   clientProfile: any;
   setClientProfile: (p: any) => void;
-  customModelId: string;
-  setCustomModelId: (id: string) => void;
 }
 
 export default function SettingsOverlay({
   onClose,
-  provider,
-  setProvider,
   clientProfile,
-  setClientProfile,
-  customModelId,
-  setCustomModelId
+  setClientProfile
 }: SettingsOverlayProps) {
   // Temporary local state for "Save only on Submit"
   const [localProfile, setLocalProfile] = React.useState(clientProfile);
-  const [localProvider, setLocalProvider] = React.useState(provider);
-  const [localModelId, setLocalModelId] = React.useState(customModelId);
 
   const handleSubmit = () => {
     setClientProfile(localProfile);
-    setProvider(localProvider);
-    setCustomModelId(localModelId.trim());
     onClose();
   };
 
@@ -69,31 +58,32 @@ export default function SettingsOverlay({
                 onChange={(e) => setLocalProfile({...localProfile, specialization: e.target.value})}
                 value={localProfile?.specialization || ""}
               />
+              <input 
+                type="text"
+                placeholder="Opposing Counsel"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-1 focus:ring-orange-500/50"
+                onChange={(e) => setLocalProfile({...localProfile, opposingCounsel: e.target.value})}
+                value={localProfile?.opposingCounsel || ""}
+              />
+              <input 
+                type="text"
+                placeholder="Court Jurisdiction"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-1 focus:ring-orange-500/50"
+                onChange={(e) => setLocalProfile({...localProfile, courtJurisdiction: e.target.value})}
+                value={localProfile?.courtJurisdiction || ""}
+              />
+              <textarea 
+                placeholder="Previous Case History"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-1 focus:ring-orange-500/50 h-24"
+                onChange={(e) => setLocalProfile({...localProfile, previousCaseHistory: e.target.value})}
+                value={localProfile?.previousCaseHistory || ""}
+              />
             </div>
 
             <div className="p-5 bg-orange-500/5 rounded-3xl border border-orange-500/10">
               <p className="text-[11px] text-orange-400/80 leading-relaxed font-medium">
                 Your advocate profile details allow for highly specialized legal reasoning and personalized document generation.
               </p>
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-[10px] text-gray-500 uppercase tracking-widest font-black">Model Provider</label>
-              <select
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-1 focus:ring-orange-500/50"
-                value={localProvider}
-                onChange={(e) => setLocalProvider(e.target.value as "gemini" | "openai")}
-              >
-                <option value="gemini">Gemini (Balanced)</option>
-                <option value="openai">OpenAI</option>
-              </select>
-              <input
-                type="text"
-                placeholder="Custom model id (optional)"
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-base focus:outline-none focus:ring-1 focus:ring-orange-500/50"
-                onChange={(e) => setLocalModelId(e.target.value)}
-                value={localModelId}
-              />
             </div>
           </div>
         </div>

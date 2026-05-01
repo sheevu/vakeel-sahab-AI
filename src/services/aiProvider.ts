@@ -32,7 +32,6 @@ export async function getAICompletion(
         : (options.systemInstruction 
             ? [{ role: "system", content: options.systemInstruction }, ...messages]
             : messages),
-      model: options.provider === "openai" ? options.customModelId : undefined,
       systemInstruction: options.systemInstruction,
       tools: options.tools,
       customModelId: options.customModelId,
@@ -40,19 +39,12 @@ export async function getAICompletion(
     }),
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || "AI request failed.");
-  }
-
   const data = await response.json();
   if (data.error) throw new Error(data.error);
-  const choices = Array.isArray(data.choices) ? data.choices : [];
-  const openAIMessage = choices[0]?.message;
-
+  
   return {
-    text: data.text || openAIMessage?.content || "",
-    toolCalls: data.toolCalls || openAIMessage?.tool_calls
+    text: data.text || data.choices[0].message.content,
+    toolCalls: data.toolCalls || data.choices[0].message.tool_calls
   };
 }
 
@@ -63,9 +55,6 @@ export async function getSpeech(text: string): Promise<string | undefined> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
     const data = await response.json();
     return data.audioData;
   } catch (error) {
@@ -81,9 +70,6 @@ export async function transcribeAudio(audioData: string, mimeType: string): Prom
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ audioData, mimeType }),
     });
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
     const data = await response.json();
     if (data.error) throw new Error(data.error);
     return data.text;
